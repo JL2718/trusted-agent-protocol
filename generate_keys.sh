@@ -11,7 +11,10 @@ openssl pkey -in ed25519_private.pem -pubout -out ed25519_public.pem
 # Copy public keys to merchant-backend/
 cp ed25519_public.pem rsa_public.pem merchant-backend/
 
-# Copy public and private keys to agent-app/
+# Copy public keys to agent-registry/
+cp ed25519_public.pem rsa_public.pem agent-registry/
+
+# Copy public and private keys to tap-agent/
 cp ed25519_public.pem ed25519_private.pem rsa_public.pem rsa_private.pem tap-agent/
 
 # Remove private keys from top-level directory

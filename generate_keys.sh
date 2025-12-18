@@ -9,5 +9,10 @@ openssl genpkey -algorithm Ed25519 -out ed25519_private.pem
 openssl pkey -in ed25519_private.pem -pubout -out ed25519_public.pem
 
 # Copy public keys to merchant-backend/
-cp ./ed25519_public.pem ../merchant-backend/ed25519_public.pem
-cp ./rsa_public.pem ../merchant-backend/rsa_public.pem
+cp ed25519_public.pem rsa_public.pem merchant-backend/
+
+# Copy public and private keys to agent-app/
+cp ed25519_public.pem ed25519_private.pem rsa_public.pem rsa_private.pem tap-agent/
+
+# Remove private keys from top-level directory
+rm rsa_private.pem rsa_public.pem ed25519_private.pem ed25519_public.pem

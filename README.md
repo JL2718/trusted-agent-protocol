@@ -57,6 +57,9 @@ This repository contains a complete sample implementation demonstrating the Trus
 
 2. **Start All Services**:
    ```bash
+   # Generate keys
+   ./generate_keys.sh
+
    # Terminal 1: Agent Registry (port 8001)
    cd agent-registry && python main.py
    

@@ -155,8 +155,8 @@ streamlit run agent_app.py --server.runOnSave true
 ### Environment Setup
 ```bash
 # Generate RSA keys (optional - for RSA-PSS-SHA256)
-openssl genrsa -out private_key.pem 2048
-openssl rsa -in private_key.pem -pubout -out public_key.pem
+openssl genrsa -out rsa_private_key.pem 2048
+openssl rsa -in rsa_private_key.pem -pubout -out rsa_public_key.pem
 
 # Generate Ed25519 keys (optional - for Ed25519)
 openssl genpkey -algorithm Ed25519 -out ed25519_private.pem

@@ -60,8 +60,8 @@ This repository contains a complete sample implementation demonstrating the Trus
    # Generate keys
    ./generate_keys.sh
 
-   # Terminal 1: Agent Registry (port 8001)
-   cd agent-registry && python main.py && python populate_sample_data.py
+   # Terminal 1: Agent Registry (port 9002)
+   cd agent-registry && (sleep 10 && python populate_sample_data.py) & python main.py 
    
    # Terminal 2: Merchant Backend (port 8000)
    cd merchant-backend && python -m uvicorn app.main:app --reload

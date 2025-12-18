@@ -21,31 +21,11 @@ import requests
 import threading
 import datetime
 import re
+import typing as ty
 from urllib.parse import urlencode
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives.asymmetric import rsa, ed25519, padding
 from cryptography.hazmat.backends import default_backend
-
-# Get RSA keys from environment variables
-def get_static_keys_from_env():
-    """Get RSA keys from environment variables"""
-    private_key = os.getenv('RSA_PRIVATE_KEY')
-    public_key = os.getenv('RSA_PUBLIC_KEY')
-    
-    if not private_key or not public_key:
-        raise ValueError("RSA_PRIVATE_KEY and RSA_PUBLIC_KEY must be set in environment variables")
-    
-    return private_key, public_key
-
-def get_ed25519_keys_from_env():
-    """Get Ed25519 keys from environment variables"""
-    private_key = os.getenv('ED25519_PRIVATE_KEY')
-    public_key = os.getenv('ED25519_PUBLIC_KEY')
-    
-    if not private_key or not public_key:
-        raise ValueError("ED25519_PRIVATE_KEY and ED25519_PUBLIC_KEY must be set in environment variables")
-    
-    return private_key, public_key
 
 # Global variable to store product extraction results across threads
 _product_extraction_results = None
@@ -53,11 +33,31 @@ _product_extraction_results = None
 # Global variable to store order completion results across threads
 _order_completion_results = None
 
-def get_static_keys():
-    """Return the static private and public keys from environment variables"""
-    return get_static_keys_from_env()
+def get_ed25519_keys():
+    """Get Ed25519 keys from environment ed25519_private.pem and ed25519_public.pem"""
+    with open("./ed25519_private.pem", "rb") as f:
+        private_key = serialization.load_pem_private_key(f.read(), password=None)
+        assert isinstance(private_key, ed25519.Ed25519PrivateKey)
+    
+    with open("./ed25519_public.pem", "rb") as f:
+        public_key = serialization.load_pem_public_key(f.read())
+        assert isinstance(public_key, ed25519.Ed25519PublicKey)
+    
+    return private_key, public_key
 
-def create_http_message_signature(private_key_pem: str, authority: str, path: str, keyid: str, nonce: str, created: int, expires: int, tag: str) -> tuple[str, str]:
+def get_rsa_keys():
+    """Get RSA keys from environment rsa_private.pem and rsa_public.pem"""
+    with open("./rsa_private.pem", "rb") as f:
+        private_key = serialization.load_pem_private_key(f.read(), password=None)
+        assert isinstance(private_key, rsa.RSAPrivateKey)
+    
+    with open("./rsa_public.pem", "rb") as f:
+        public_key = serialization.load_pem_public_key(f.read())
+        assert isinstance(public_key, rsa.RSAPublicKey)
+    
+    return private_key, public_key
+
+def create_http_message_signature(private_key: ty.Union[rsa.RSAPrivateKey, ed25519.Ed25519PrivateKey], authority: str, path: str, keyid: str, nonce: str, created: int, expires: int, tag: str) -> tuple[str, str]:
     """Create HTTP Message Signature following RFC 9421 syntax"""
     try:
         # Create signature parameters string
@@ -75,13 +75,7 @@ def create_http_message_signature(private_key_pem: str, authority: str, path: st
         print(f"🌐 Authority: {authority}")
         print(f"📍 Path: {path}")
         print(f"📋 Signature Params: {signature_params}")
-        
-        # Load private key
-        private_key = serialization.load_pem_private_key(
-            private_key_pem.encode('utf-8'),
-            password=None,
-            backend=default_backend()
-        )
+
         
         # Sign the signature base string using RSA-PSS (matching the algorithm declared)
         signature = private_key.sign(
@@ -109,6 +103,47 @@ def create_http_message_signature(private_key_pem: str, authority: str, path: st
         
     except Exception as e:
         print(f"❌ Error creating HTTP message signature: {str(e)}")
+        return "", ""
+
+def create_ed25519_signature(private_key: ed25519.Ed25519PrivateKey, authority: str, path: str, keyid: str, nonce: str, created: int, expires: int, tag: str) -> tuple[str, str]:
+    """Create HTTP Message Signature using Ed25519 following RFC 9421"""
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        
+        print(f"🔐 Creating Ed25519 signature...")
+        print(f"🌐 Authority: {authority}")
+        print(f"📍 Path: {path}")
+        
+        # Create signature parameters string
+        signature_params = f'("@authority" "@path"); created={created}; expires={expires}; keyId="{keyid}"; alg="ed25519"; nonce="{nonce}"; tag="{tag}"'
+        
+        # Create the signature base string
+        signature_base_lines = [
+            f'"@authority": {authority}',
+            f'"@path": {path}',
+            f'"@signature-params": {signature_params}'
+        ]
+        signature_base = '\n'.join(signature_base_lines)
+        
+        print(f"🔐 Ed25519 Signature Base String:\n{signature_base}")
+        
+        # Sign with Ed25519 (no padding needed)
+        signature = private_key.sign(signature_base.encode('utf-8'))
+        signature_b64 = base64.b64encode(signature).decode('utf-8')
+        
+        # Format headers
+        signature_input_header = f'sig2=("@authority" "@path"); created={created}; expires={expires}; keyId="{keyid}"; alg="ed25519"; nonce="{nonce}"; tag="{tag}"'
+        signature_header = f'sig2=:{signature_b64}:'
+        
+        print(f"✅ Created Ed25519 signature")
+        print(f"📤 Signature-Input: {signature_input_header}")
+        print(f"🔒 Signature: {signature_header}")
+        
+        return signature_input_header, signature_header
+        
+    except Exception as e:
+        print(f"❌ Error creating Ed25519 signature: {str(e)}")
+        st.error(f"Error creating Ed25519 signature: {str(e)}")
         return "", ""
 
 def parse_url_components(url: str) -> tuple[str, str]:
@@ -1229,152 +1264,6 @@ def complete_checkout_with_playwright(product_url: str, cart_url: str, checkout_
     except Exception as e:
         return False, {'error': f'Checkout error: {str(e)}', 'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')}
 
-def create_signature(private_key_pem: str, json_data: str) -> str:
-    """Create a signature using the private key with JSON data and base64 encoding"""
-    try:
-        # Parse JSON to validate it
-        try:
-            parsed_json = json.loads(json_data)
-        except json.JSONDecodeError as e:
-            st.error(f"Invalid JSON format: {str(e)}")
-            return ""
-        
-        # Convert JSON to string (compact format)
-        json_string = json.dumps(parsed_json, separators=(',', ':'), sort_keys=True)
-        
-        # Base64 encode the JSON string
-        base64_data = base64.b64encode(json_string.encode('utf-8')).decode('utf-8')
-        print(f"Base64 Encoded Data: {base64_data}")    
-        
-        # Load private key
-        private_key = serialization.load_pem_private_key(
-            private_key_pem.encode('utf-8'),
-            password=None,
-            backend=default_backend()
-        )
-        
-        # Sign the base64 encoded data
-        signature = private_key.sign(
-            base64_data.encode('utf-8'),
-            padding.PSS(
-                mgf=padding.MGF1(hashes.SHA256()),
-                salt_length=padding.PSS.MAX_LENGTH
-            ),
-            hashes.SHA256()
-        )
-        
-        return base64.b64encode(signature).decode('utf-8')
-    except Exception as e:
-        st.error(f"Error creating signature: {str(e)}")
-        return ""
-
-def create_http_message_signature(private_key_pem: str, authority: str, path: str, keyid: str, nonce: str, created: int, expires: int, tag: str) -> tuple[str, str]:
-    """Create HTTP Message Signature following RFC 9421 syntax"""
-    try:
-        # Create signature parameters string
-        signature_params = f'("@authority" "@path"); created={created}; expires={expires}; keyId="{keyid}"; alg="rsa-pss-sha256"; nonce="{nonce}"; tag="{tag}"'
-        
-        # Create the signature base string following RFC 9421 format
-        signature_base_lines = [
-            f'"@authority": {authority}',
-            f'"@path": {path}',
-            f'"@signature-params": {signature_params}'
-        ]
-        signature_base = '\n'.join(signature_base_lines)
-        
-        print(f"Signature Base String:\n{signature_base}")
-        print(f"Authority: {authority}")
-        print(f"Path: {path}")
-        print(f"Signature Params: {signature_params}")
-        
-        # Load private key
-        private_key = serialization.load_pem_private_key(
-            private_key_pem.encode('utf-8'),
-            password=None,
-            backend=default_backend()
-        )
-        
-        # Sign the signature base string using RSA-PSS (matching the algorithm declared)
-        signature = private_key.sign(
-            signature_base.encode('utf-8'),
-            padding.PSS(
-                mgf=padding.MGF1(hashes.SHA256()),
-                salt_length=padding.PSS.MAX_LENGTH
-            ),
-            hashes.SHA256()
-        )
-        
-        signature_b64 = base64.b64encode(signature).decode('utf-8')
-        
-        # Format the signature-input header (RFC 9421 format)
-        signature_input_header = f'sig2=("@authority" "@path"); created={created}; expires={expires}; keyId="{keyid}"; alg="rsa-pss-sha256"; nonce="{nonce}"; tag="{tag}"'
-        
-        # Format the signature header (RFC 9421 format)
-        signature_header = f'sig2=:{signature_b64}:'
-        
-        return signature_input_header, signature_header
-        
-    except Exception as e:
-        st.error(f"Error creating HTTP message signature: {str(e)}")
-        return "", ""
-
-def create_ed25519_signature(private_key_pem: str, authority: str, path: str, keyid: str, nonce: str, created: int, expires: int, tag: str) -> tuple[str, str]:
-    """Create HTTP Message Signature using Ed25519 following RFC 9421"""
-    try:
-        from cryptography.hazmat.primitives.asymmetric import ed25519
-        
-        print(f"🔐 Creating Ed25519 signature...")
-        print(f"🌐 Authority: {authority}")
-        print(f"📍 Path: {path}")
-        
-        # Create signature parameters string
-        signature_params = f'("@authority" "@path"); created={created}; expires={expires}; keyId="{keyid}"; alg="ed25519"; nonce="{nonce}"; tag="{tag}"'
-        
-        # Create the signature base string
-        signature_base_lines = [
-            f'"@authority": {authority}',
-            f'"@path": {path}',
-            f'"@signature-params": {signature_params}'
-        ]
-        signature_base = '\n'.join(signature_base_lines)
-        
-        print(f"🔐 Ed25519 Signature Base String:\n{signature_base}")
-        
-        # Load Ed25519 keys from environment variables
-        try:
-            ed25519_private_b64, ed25519_public_b64 = get_ed25519_keys_from_env()
-            print(f"🔑 Using Ed25519 keys from environment variables")
-        except ValueError as e:
-            print(f"❌ Ed25519 keys not found in environment: {e}")
-            st.error(f"Ed25519 keys not configured. Please add ED25519_PRIVATE_KEY and ED25519_PUBLIC_KEY to your .env file.")
-            return "", ""
-        
-        # Load private key from base64
-        private_bytes = base64.b64decode(ed25519_private_b64)
-        private_key = ed25519.Ed25519PrivateKey.from_private_bytes(private_bytes)
-        
-        print(f"🔑 Using Ed25519 Private Key: {ed25519_private_b64[:20]}...")
-        print(f"🔑 Using Ed25519 Public Key: {ed25519_public_b64[:20]}...")
-        
-        # Sign with Ed25519 (no padding needed)
-        signature = private_key.sign(signature_base.encode('utf-8'))
-        signature_b64 = base64.b64encode(signature).decode('utf-8')
-        
-        # Format headers
-        signature_input_header = f'sig2=("@authority" "@path"); created={created}; expires={expires}; keyId="{keyid}"; alg="ed25519"; nonce="{nonce}"; tag="{tag}"'
-        signature_header = f'sig2=:{signature_b64}:'
-        
-        print(f"✅ Created Ed25519 signature")
-        print(f"📤 Signature-Input: {signature_input_header}")
-        print(f"🔒 Signature: {signature_header}")
-        
-        return signature_input_header, signature_header
-        
-    except Exception as e:
-        print(f"❌ Error creating Ed25519 signature: {str(e)}")
-        st.error(f"Error creating Ed25519 signature: {str(e)}")
-        return "", ""
-
 def parse_url_components(url: str) -> tuple[str, str]:
     """Parse URL to extract authority and path components"""
     try:
@@ -1424,9 +1313,9 @@ def main():
     
     # Initialize session state with static keys
     if 'private_key' not in st.session_state:
-        st.session_state.private_key = ""
+        st.session_state.rsa_private_key = ""
     if 'public_key' not in st.session_state:
-        st.session_state.public_key = ""
+        st.session_state.rsa_public_key = ""
     if 'ed25519_private_key' not in st.session_state:
         st.session_state.ed25519_private_key = ""
     if 'ed25519_public_key' not in st.session_state:
@@ -1457,15 +1346,15 @@ def main():
         st.session_state.input_data = json.dumps(default_input, indent=2)
     
     # Load static keys if not already loaded
-    if not st.session_state.private_key or not st.session_state.public_key:
-        private_key, public_key = get_static_keys()
-        st.session_state.private_key = private_key
-        st.session_state.public_key = public_key
+    if not st.session_state.rsa_private_key or not st.session_state.rsa_public_key:
+        private_key, public_key = get_rsa_keys()
+        st.session_state.rsa_private_key = private_key
+        st.session_state.rsa_public_key = public_key
     
     # Load Ed25519 keys if not already loaded
     if not st.session_state.ed25519_private_key or not st.session_state.ed25519_public_key:
         try:
-            ed25519_private_key, ed25519_public_key = get_ed25519_keys_from_env()
+            ed25519_private_key, ed25519_public_key = get_ed25519_keys()
             st.session_state.ed25519_private_key = ed25519_private_key
             st.session_state.ed25519_public_key = ed25519_public_key
         except ValueError:
@@ -1611,7 +1500,7 @@ def main():
         else:
             launch_disabled = False
     else:  # rsa-pss-sha256
-        if not st.session_state.private_key:
+        if not st.session_state.rsa_private_key:
             st.warning("Please configure RSA keys in your .env file first")
             launch_disabled = True
         else:
@@ -1629,7 +1518,7 @@ def main():
     
     # Single launch button that adapts to the selected action
     if st.button(button_text, type="primary", disabled=launch_disabled, help=button_help):
-        if st.session_state.private_key:
+        if st.session_state.rsa_private_key:
             import time
             spinner_text = f"Creating RFC 9421 signature and {'fetching product details' if action_choice == 'Product Details' else 'completing checkout'}..."
             
@@ -1657,7 +1546,7 @@ def main():
                         # Create RFC 9421 compliant signature using selected algorithm
                         if signature_algorithm == "ed25519":
                             signature_input_header, signature_header = create_ed25519_signature(
-                                private_key_pem="",  # Ed25519 function will load from environment
+                                private_key=st.session_state.ed25519_private_key,
                                 authority=authority,
                                 path=path,
                                 keyid="primary-ed25519",
@@ -1668,7 +1557,7 @@ def main():
                             )
                         else:  # rsa-pss-sha256
                             signature_input_header, signature_header = create_http_message_signature(
-                                private_key_pem=st.session_state.private_key,
+                                private_key=st.session_state.rsa_private_key,
                                 authority=authority,
                                 path=path,
                                 keyid="primary",

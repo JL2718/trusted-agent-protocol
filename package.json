@@ -8,7 +8,9 @@
         "proxy": "bun run src/proxy/module.ts",
         "test:proxy": "bun test ./src/proxy/test.ts",
         "merchant": "bun run src/merchant/module.ts",
-        "test:merchant": "bun test ./src/merchant/test.ts"
+        "test:merchant": "bun test ./src/merchant/test.ts",
+        "agent": "bun run src/agent/module.ts",
+        "test:agent": "bun test ./src/agent/test.ts"
     },
     "private": true,
     "devDependencies": {

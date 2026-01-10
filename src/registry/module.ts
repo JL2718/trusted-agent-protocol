@@ -1,10 +1,8 @@
 import { RegistryError, RegistryService } from "./interface";
-import { RedisRegistryService } from "./storage/redis/module";
-import { MemoryRegistryService } from "./storage/memory/module";
-import { SqliteRegistryService } from "./storage/sqlite/module";
+import { getRegistryService } from "./storage/module";
 
 export * from "./interface";
-export { RedisRegistryService, MemoryRegistryService, SqliteRegistryService };
+export * from "./storage/module";
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -114,20 +112,6 @@ function createHandler(service: RegistryService) {
                 headers: { ...corsHeaders, "Content-Type": "application/json" }
             });
         }
-    }
-}
-
-export function getRegistryService(): RegistryService {
-    const type = process.env.REGISTRY_STORAGE || 'memory';
-
-    switch (type) {
-        case 'redis':
-            return new RedisRegistryService();
-        case 'sqlite':
-            return new SqliteRegistryService(process.env.REGISTRY_DB_PATH || 'registry.db');
-        case 'memory':
-        default:
-            return new MemoryRegistryService();
     }
 }
 

@@ -14,37 +14,19 @@ const MERCHANT_URL = `http://localhost:${MERCHANT_PORT}`;
 const PROXY_URL = `https://localhost:${PROXY_PORT}`;
 
 let registryServer: any, merchantServer: any, proxyServer: any;
-let caCert: string, caKey: forge.pki.rsa.PrivateKey;
 let serverCert: string, serverKey: string;
 
 function generateE2ECerts() {
-    // 1. Root CA
-    const caKeys = forge.pki.rsa.generateKeyPair(2048);
-    caKey = caKeys.privateKey;
-    const ca = forge.pki.createCertificate();
-    ca.publicKey = caKeys.publicKey;
-    ca.serialNumber = '01';
-    ca.validity.notBefore = new Date();
-    ca.validity.notAfter = new Date();
-    ca.validity.notAfter.setFullYear(ca.validity.notBefore.getFullYear() + 1);
-    const attrs = [{ name: 'commonName', value: 'E2E CA' }];
-    ca.setSubject(attrs);
-    ca.setIssuer(attrs);
-    ca.setExtensions([{ name: 'basicConstraints', cA: true }]);
-    ca.sign(caKeys.privateKey, forge.md.sha256.create());
-    caCert = forge.pki.certificateToPem(ca);
-
-    // 2. Server Cert (localhost)
     const sKeys = forge.pki.rsa.generateKeyPair(2048);
     const sCert = forge.pki.createCertificate();
     sCert.publicKey = sKeys.publicKey;
-    sCert.serialNumber = '02';
+    sCert.serialNumber = '01';
     sCert.validity.notBefore = new Date();
     sCert.validity.notAfter = new Date();
     sCert.validity.notAfter.setFullYear(sCert.validity.notBefore.getFullYear() + 1);
     sCert.setSubject([{ name: 'commonName', value: 'localhost' }]);
-    sCert.setIssuer(ca.subject.attributes);
-    sCert.sign(caKeys.privateKey, forge.md.sha256.create());
+    sCert.setIssuer(sCert.subject.attributes);
+    sCert.sign(sKeys.privateKey, forge.md.sha256.create());
     serverCert = forge.pki.certificateToPem(sCert);
     serverKey = forge.pki.privateKeyToPem(sKeys.privateKey);
 }
@@ -53,13 +35,13 @@ function generateClientCert(agentId: string) {
     const cKeys = forge.pki.rsa.generateKeyPair(2048);
     const cCert = forge.pki.createCertificate();
     cCert.publicKey = cKeys.publicKey;
-    cCert.serialNumber = '03';
+    cCert.serialNumber = '01';
     cCert.validity.notBefore = new Date();
     cCert.validity.notAfter = new Date();
     cCert.validity.notAfter.setFullYear(cCert.validity.notBefore.getFullYear() + 1);
     cCert.setSubject([{ name: 'commonName', value: agentId }]);
-    cCert.setIssuer(forge.pki.certificateFromPem(caCert).subject.attributes);
-    cCert.sign(caKey, forge.md.sha256.create());
+    cCert.setIssuer(cCert.subject.attributes);
+    cCert.sign(cKeys.privateKey, forge.md.sha256.create());
 
     return {
         cert: forge.pki.certificateToPem(cCert),
@@ -75,7 +57,7 @@ beforeAll(async () => {
         port: PROXY_PORT,
         merchantUrl: MERCHANT_URL,
         registryUrl: REGISTRY_URL,
-        tls: { cert: serverCert, key: serverKey, ca: caCert }
+        tls: { cert: serverCert, key: serverKey }
     });
     proxyServer.start();
     await new Promise(r => setTimeout(r, 500));
@@ -136,7 +118,6 @@ describe("TAP End-to-End Configurable Auth", () => {
             authMode: 'mTLS',
             tls: {
                 ...clientTls,
-                ca: caCert,
                 rejectUnauthorized: false
             }
         });

@@ -22,7 +22,6 @@ Object.assign(publicJwk, { kid: KEY_ID, kty: "OKP", alg: "EdDSA", crv: "Ed25519"
 const AGENT_ID = "test-agent-mtls";
 
 // Certificate State
-let ca: string;
 let serverCert: string;
 let serverKey: string;
 let clientCert: string;
@@ -34,43 +33,29 @@ let registryServer: any;
 let proxyServer: any;
 
 function generateTestCerts() {
-    const caKeys = forge.pki.rsa.generateKeyPair(2048);
-    const caCert = forge.pki.createCertificate();
-    caCert.publicKey = caKeys.publicKey;
-    caCert.serialNumber = '01';
-    caCert.validity.notBefore = new Date();
-    caCert.validity.notAfter = new Date();
-    caCert.validity.notAfter.setFullYear(caCert.validity.notBefore.getFullYear() + 1);
-    const attrs = [{ name: 'commonName', value: 'Test CA' }];
-    caCert.setSubject(attrs);
-    caCert.setIssuer(attrs);
-    caCert.setExtensions([{ name: 'basicConstraints', cA: true }]);
-    caCert.sign(caKeys.privateKey, forge.md.sha256.create());
-    ca = forge.pki.certificateToPem(caCert);
-
     const sKeys = forge.pki.rsa.generateKeyPair(2048);
     const sCert = forge.pki.createCertificate();
     sCert.publicKey = sKeys.publicKey;
-    sCert.serialNumber = '02';
+    sCert.serialNumber = '01';
     sCert.validity.notBefore = new Date();
     sCert.validity.notAfter = new Date();
     sCert.validity.notAfter.setFullYear(sCert.validity.notBefore.getFullYear() + 1);
     sCert.setSubject([{ name: 'commonName', value: 'localhost' }]);
-    sCert.setIssuer(caCert.subject.attributes);
-    sCert.sign(caKeys.privateKey, forge.md.sha256.create());
+    sCert.setIssuer(sCert.subject.attributes);
+    sCert.sign(sKeys.privateKey, forge.md.sha256.create());
     serverCert = forge.pki.certificateToPem(sCert);
     serverKey = forge.pki.privateKeyToPem(sKeys.privateKey);
 
     const cKeys = forge.pki.rsa.generateKeyPair(2048);
     const cCert = forge.pki.createCertificate();
     cCert.publicKey = cKeys.publicKey;
-    cCert.serialNumber = '03';
+    cCert.serialNumber = '01';
     cCert.validity.notBefore = new Date();
     cCert.validity.notAfter = new Date();
     cCert.validity.notAfter.setFullYear(cCert.validity.notBefore.getFullYear() + 1);
     cCert.setSubject([{ name: 'commonName', value: AGENT_ID }]);
-    cCert.setIssuer(caCert.subject.attributes);
-    cCert.sign(caKeys.privateKey, forge.md.sha256.create());
+    cCert.setIssuer(cCert.subject.attributes);
+    cCert.sign(cKeys.privateKey, forge.md.sha256.create());
     clientCert = forge.pki.certificateToPem(cCert);
     clientKey = forge.pki.privateKeyToPem(cKeys.privateKey);
 }
@@ -106,7 +91,7 @@ beforeAll(async () => {
         merchantUrl: MERCHANT_URL,
         registryUrl: REGISTRY_URL,
         debug: true,
-        tls: { cert: serverCert, key: serverKey, ca: ca }
+        tls: { cert: serverCert, key: serverKey }
     });
     proxyServer.start();
 });
@@ -131,7 +116,6 @@ describe("Proxy with mTLS and Signatures", () => {
             tls: {
                 cert: clientCert,
                 key: clientKey,
-                ca: ca,
                 rejectUnauthorized: false
             }
         });

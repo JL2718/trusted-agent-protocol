@@ -46,7 +46,7 @@ export class Agent {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 name: this.config.name,
-                domain: "https://agent.example.com",
+                domain: this.config.domain || `https://${this.config.name.toLowerCase().replace(/\s+/g, '-')}.example.com`,
                 jwk: this.keyPair.publicJwk
             })
         });
@@ -62,47 +62,68 @@ export class Agent {
     }
 
     /**
-     * Makes a signed request to the Proxy
+     * Makes a request to the Proxy using the configured authentication mode
      */
     public async fetch(path: string, options: RequestInit = {}) {
-        if (!this.keyPair || !this.keyId) throw new Error("Not initialized");
-
+        const authMode = this.config.authMode || 'signature';
         const method = options.method || 'GET';
         const url = `${this.config.proxyUrl}${path}`;
-
-        // Parse URL to get host for signing
         const urlObj = new URL(url);
 
-        if (this.config.debug) console.log(`[Agent] Requesting ${method} ${url}...`);
+        if (this.config.debug) console.log(`[Agent] Requesting via ${authMode}: ${method} ${url}...`);
 
-        // Prepare Request Options for Signing
-        const requestToSign = {
-            method,
-            url,
-            headers: {
-                host: urlObj.host,
-                ...options.headers
-            }
+        let headers: Record<string, string> = {
+            host: urlObj.host,
+            ...((options.headers as any) || {})
         };
 
-        // Generate Signatures
-        // Note: passing the KeyObject (privateKey) as discovered in Proxy tests
-        const signedHeaders = await createSignatureHeaders({
-            request: requestToSign,
-            privateKey: this.keyPair.privateKey,
-            keyId: this.keyId
-        });
-
-        // Merge headers
-        const headers = {
-            ...options.headers,
-            ...signedHeaders
-        };
-
-        // Execute Request
-        return fetch(url, {
+        const fetchOptions: any = {
             ...options,
             headers
-        });
+        };
+
+        // 1. Signature Auth
+        if (authMode === 'signature') {
+            if (!this.keyPair || !this.keyId) {
+                throw new Error("Agent keys not generated. Necessary for signature auth.");
+            }
+
+            const requestToSign = {
+                method,
+                url,
+                headers
+            };
+
+            const signedHeaders = await createSignatureHeaders({
+                request: requestToSign,
+                privateKey: this.keyPair.privateKey,
+                keyId: this.keyId
+            });
+
+            fetchOptions.headers = {
+                ...headers,
+                ...signedHeaders
+            };
+        }
+
+        // 2. mTLS Auth (Bun specific tls configuration)
+        if (authMode === 'mTLS' && this.config.tls) {
+            fetchOptions.tls = {
+                cert: this.config.tls.cert,
+                key: this.config.tls.key,
+                ca: this.config.tls.ca,
+                rejectUnauthorized: this.config.tls.rejectUnauthorized !== undefined
+                    ? this.config.tls.rejectUnauthorized
+                    : true
+            };
+        } else if (authMode === 'mTLS') {
+            // Fallback for HTTPS proxy even without mTLS if configured
+            // we should still allow fetch to fail if cert is missing but mode is mTLS
+            if (this.config.debug) console.warn("[Agent] mTLS requested but no TLS config provided.");
+            // If proxy is HTTPS, we might still need rejectUnauthorized: false for self-signed
+            fetchOptions.tls = { rejectUnauthorized: false };
+        }
+
+        return fetch(url, fetchOptions);
     }
 }

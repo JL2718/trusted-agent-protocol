@@ -1,4 +1,4 @@
-import { Agent } from './src';
+import { Agent } from './impl';
 
 // Environment
 const REGISTRY_URL = process.env.AGENT_REGISTRY_URL || "http://localhost:9002";

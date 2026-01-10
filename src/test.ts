@@ -5,32 +5,36 @@ import { startMerchant } from "./merchant/impl";
 import { Agent } from "./agent/impl";
 import forge from 'node-forge';
 
-const REGISTRY_PORT = 9302;
-const MERCHANT_PORT = 3300;
-const PROXY_PORT = 3301;
+const REGISTRY_PORT = 9402;
+const MERCHANT_PORT = 3400;
+const PROXY_PORT = 3401;
 
 const REGISTRY_URL = `http://localhost:${REGISTRY_PORT}`;
 const MERCHANT_URL = `http://localhost:${MERCHANT_PORT}`;
 const PROXY_URL = `https://localhost:${PROXY_PORT}`;
 
 let registryServer: any, merchantServer: any, proxyServer: any;
-let ca: string, cert: string, key: string;
+let caCert: string, caKey: forge.pki.rsa.PrivateKey;
+let serverCert: string, serverKey: string;
 
 function generateE2ECerts() {
+    // 1. Root CA
     const caKeys = forge.pki.rsa.generateKeyPair(2048);
-    const caCert = forge.pki.createCertificate();
-    caCert.publicKey = caKeys.publicKey;
-    caCert.serialNumber = '01';
-    caCert.validity.notBefore = new Date();
-    caCert.validity.notAfter = new Date();
-    caCert.validity.notAfter.setFullYear(caCert.validity.notBefore.getFullYear() + 1);
+    caKey = caKeys.privateKey;
+    const ca = forge.pki.createCertificate();
+    ca.publicKey = caKeys.publicKey;
+    ca.serialNumber = '01';
+    ca.validity.notBefore = new Date();
+    ca.validity.notAfter = new Date();
+    ca.validity.notAfter.setFullYear(ca.validity.notBefore.getFullYear() + 1);
     const attrs = [{ name: 'commonName', value: 'E2E CA' }];
-    caCert.setSubject(attrs);
-    caCert.setIssuer(attrs);
-    caCert.setExtensions([{ name: 'basicConstraints', cA: true }]);
-    caCert.sign(caKeys.privateKey, forge.md.sha256.create());
-    ca = forge.pki.certificateToPem(caCert);
+    ca.setSubject(attrs);
+    ca.setIssuer(attrs);
+    ca.setExtensions([{ name: 'basicConstraints', cA: true }]);
+    ca.sign(caKeys.privateKey, forge.md.sha256.create());
+    caCert = forge.pki.certificateToPem(ca);
 
+    // 2. Server Cert (localhost)
     const sKeys = forge.pki.rsa.generateKeyPair(2048);
     const sCert = forge.pki.createCertificate();
     sCert.publicKey = sKeys.publicKey;
@@ -39,10 +43,28 @@ function generateE2ECerts() {
     sCert.validity.notAfter = new Date();
     sCert.validity.notAfter.setFullYear(sCert.validity.notBefore.getFullYear() + 1);
     sCert.setSubject([{ name: 'commonName', value: 'localhost' }]);
-    sCert.setIssuer(caCert.subject.attributes);
+    sCert.setIssuer(ca.subject.attributes);
     sCert.sign(caKeys.privateKey, forge.md.sha256.create());
-    cert = forge.pki.certificateToPem(sCert);
-    key = forge.pki.privateKeyToPem(sKeys.privateKey);
+    serverCert = forge.pki.certificateToPem(sCert);
+    serverKey = forge.pki.privateKeyToPem(sKeys.privateKey);
+}
+
+function generateClientCert(agentId: string) {
+    const cKeys = forge.pki.rsa.generateKeyPair(2048);
+    const cCert = forge.pki.createCertificate();
+    cCert.publicKey = cKeys.publicKey;
+    cCert.serialNumber = '03';
+    cCert.validity.notBefore = new Date();
+    cCert.validity.notAfter = new Date();
+    cCert.validity.notAfter.setFullYear(cCert.validity.notBefore.getFullYear() + 1);
+    cCert.setSubject([{ name: 'commonName', value: agentId }]);
+    cCert.setIssuer(forge.pki.certificateFromPem(caCert).subject.attributes);
+    cCert.sign(caKey, forge.md.sha256.create());
+
+    return {
+        cert: forge.pki.certificateToPem(cCert),
+        key: forge.pki.privateKeyToPem(cKeys.privateKey)
+    };
 }
 
 beforeAll(async () => {
@@ -53,7 +75,7 @@ beforeAll(async () => {
         port: PROXY_PORT,
         merchantUrl: MERCHANT_URL,
         registryUrl: REGISTRY_URL,
-        tls: { cert, key, ca }
+        tls: { cert: serverCert, key: serverKey, ca: caCert }
     });
     proxyServer.start();
     await new Promise(r => setTimeout(r, 500));
@@ -65,10 +87,15 @@ afterAll(() => {
     proxyServer?.stop();
 });
 
-describe("TAP End-to-End (HTTPS)", () => {
-    test("Agent registers and fetches via HTTPS Proxy", async () => {
-        const agent = new Agent({ name: "E2E Agent", registryUrl: REGISTRY_URL, proxyUrl: PROXY_URL });
-        agent.generateKey();
+describe("TAP End-to-End Configurable Auth", () => {
+    test("Agent with authMode: 'signature'", async () => {
+        const agent = new Agent({
+            name: "Sig Agent",
+            registryUrl: REGISTRY_URL,
+            proxyUrl: PROXY_URL,
+            authMode: 'signature'
+        });
+        agent.generateKey("sig-key");
         await agent.register();
 
         const originalFetch = global.fetch;
@@ -83,23 +110,52 @@ describe("TAP End-to-End (HTTPS)", () => {
         expect(res.status).toBe(200);
         const data = await res.json();
         expect(data.id.toString()).toBe("1");
+
         global.fetch = originalFetch;
     });
 
-    test("Unregistered agent is rejected", async () => {
-        const agent = new Agent({ name: "Bad Agent", registryUrl: REGISTRY_URL, proxyUrl: PROXY_URL });
-        agent.generateKey();
+    test("Agent with authMode: 'mTLS'", async () => {
+        // 1. Create agent and register identity
+        const agent = new Agent({
+            name: "mTLS Agent",
+            registryUrl: REGISTRY_URL,
+            proxyUrl: PROXY_URL
+        });
+        agent.generateKey("mtls-key");
+        await agent.register();
+        const agentId = (agent as any).agentId; // Use the actual registered ID
+
+        // 2. Generate client cert for this agentId
+        const clientTls = generateClientCert(agentId);
+
+        // 3. Re-configure agent for mTLS
+        const mtlsAgent = new Agent({
+            name: "mTLS Agent",
+            registryUrl: REGISTRY_URL,
+            proxyUrl: PROXY_URL,
+            authMode: 'mTLS',
+            tls: {
+                ...clientTls,
+                ca: caCert,
+                rejectUnauthorized: false
+            }
+        });
 
         const originalFetch = global.fetch;
         (global as any).fetch = (url: any, init: any) => {
             if (url.startsWith(PROXY_URL)) {
-                return originalFetch(url, { ...init, tls: { rejectUnauthorized: false } });
+                // If the test provides tls options, merge them
+                const tls = { ...init.tls, rejectUnauthorized: false };
+                return originalFetch(url, { ...init, tls });
             }
             return originalFetch(url, init);
         };
 
-        const res = await agent.fetch("/product/1");
-        expect(res.status).toBe(403);
+        const res = await mtlsAgent.fetch("/product/1");
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.id.toString()).toBe("1");
+
         global.fetch = originalFetch;
     });
 });

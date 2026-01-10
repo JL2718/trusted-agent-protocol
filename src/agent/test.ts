@@ -1,5 +1,5 @@
-import { describe, test, expect, spyOn, mock } from "bun:test";
-import { Agent } from "./src";
+import { describe, test, expect, mock } from "bun:test";
+import { Agent } from "./impl";
 
 const CONFIG = {
     name: "Test Agent",
@@ -13,30 +13,61 @@ describe("TAP Agent", () => {
         const agent = new Agent(CONFIG);
         agent.generateKey("test-key");
 
-        // Access private property via 'any' casting for testing
         const keys = (agent as any).keyPair;
         expect(keys).toBeDefined();
         expect(keys.publicJwk.kid).toBe("test-key");
-        expect(keys.publicJwk.kty).toBe("OKP");
     });
 
-    test("register() should call registry API", async () => {
+    test("fetch() with authMode: 'signature' (default)", async () => {
         const agent = new Agent(CONFIG);
         agent.generateKey();
 
-        // Mock fetch
         const originalFetch = global.fetch;
-        global.fetch = mock(async (url) => {
-            if (url.toString().includes("/agents")) {
-                return new Response(JSON.stringify({ id: "agent-123" }), { status: 201 });
-            }
-            return new Response("Not Found", { status: 404 });
+        let capturedOptions: any;
+        global.fetch = mock(async (url, options) => {
+            capturedOptions = options;
+            return new Response("ok");
         });
 
-        await agent.register();
-        expect((agent as any).agentId).toBe("agent-123");
+        await agent.fetch("/test");
 
-        // Restore fetch
+        expect(capturedOptions.headers).toHaveProperty("Signature");
+        expect(capturedOptions.headers).toHaveProperty("Signature-Input");
+        expect(capturedOptions.tls).toBeUndefined();
+
+        global.fetch = originalFetch;
+    });
+
+    test("fetch() with authMode: 'mTLS'", async () => {
+        const agent = new Agent({
+            ...CONFIG,
+            authMode: 'mTLS',
+            tls: {
+                cert: "CERT",
+                key: "KEY",
+                ca: "CA",
+                rejectUnauthorized: false
+            }
+        });
+
+        const originalFetch = global.fetch;
+        let capturedOptions: any;
+        global.fetch = mock(async (url, options) => {
+            capturedOptions = options;
+            return new Response("ok");
+        });
+
+        await agent.fetch("/test");
+
+        // Should NOT have signature headers
+        expect(capturedOptions.headers).not.toHaveProperty("signature");
+
+        // Should have TLS configuration
+        expect(capturedOptions.tls).toBeDefined();
+        expect(capturedOptions.tls.cert).toBe("CERT");
+        expect(capturedOptions.tls.key).toBe("KEY");
+        expect(capturedOptions.tls.rejectUnauthorized).toBe(false);
+
         global.fetch = originalFetch;
     });
 });

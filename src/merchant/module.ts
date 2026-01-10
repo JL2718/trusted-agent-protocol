@@ -1,4 +1,4 @@
-import { startMerchant } from './src';
+import { startMerchant } from './impl';
 
 const PORT = parseInt(process.env.PORT || "3000");
 const DEBUG = process.env.DEBUG === "true";

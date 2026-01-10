@@ -13,7 +13,7 @@
         "test:merchant": "bun test ./src/merchant/test.ts",
         "agent": "bun run src/agent/module.ts",
         "test:agent": "bun test ./src/agent/test.ts",
-        "test:e2e": "bun test ./src/e2e_test.ts"
+        "test:e2e": "bun test ./src/test.ts"
     },
     "private": true,
     "devDependencies": {

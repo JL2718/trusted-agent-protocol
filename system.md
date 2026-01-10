@@ -40,23 +40,15 @@ The Trusted Agent Protocol (TAP) system consists of four main components designe
   - Exposes API for Agent registration.
   - Provides public API for the CDN Proxy to retrieve keys (JWKs) for verification.
 
-### 4. Merchant Backend (Application)
-- **Port**: `8000`
-- **Technology**: Bun, TypeScript.
-- **Role**: Minimal Resource Server.
-- **Logic**:
-  - Provides a read-only list of products.
-  - No database (In-memory static data).
-  - Receives traffic via the CDN Proxy (`/api/*`).
-
-### 5. Merchant Frontend
+### 4. Merchant Service (Application)
 - **Port**: `3000`
-- **Technology**: Bun, VanJS.
-- **Role**: Simple Display UI.
+- **Technology**: Bun, TypeScript.
+- **Role**: Unified Resource Server & UI Host.
 - **Logic**:
-  - Single page application.
-  - Fetches and displays product data from the Backend.
-  - Served via CDN Proxy root (`/`).
+  - Serves static frontend assets (VanJS).
+  - Provides a read-only list of products via API (`/api/products`).
+  - No database (In-memory static data).
+  - Receives traffic via the CDN Proxy.
 
 ---
 
@@ -75,20 +67,19 @@ The Trusted Agent Protocol (TAP) system consists of four main components designe
 | `GET` | `/agents/{agent_id}/keys/{key_id}` | Get specific key details |
 
 ### CDN Proxy (Port 3001)
-*Acts as a middleware. Routes not matching `/api` are forwarded to Port 3000.*
+*Acts as a middleware.*
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/test-proxy` | Diagnostic endpoint (Bypasses signature check) |
 | `REQ` | `/product/*` | **Secured**: Enforces Signature Verification |
-| `*` | `/api/*` | Proxies to Merchant Backend (8000) |
-| `*` | `/*` | Proxies to Merchant Frontend (3000) |
+| `*` | `/*` | Proxies ALL traffic to Merchant Service (3000) |
 
-### Merchant Backend (Port 8000)
-*Prefix: /api*
+### Merchant Service (Port 3000)
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/products` | List all products (Static) |
-| `GET` | `/products/{id}` | Get product details (Static) |
+| `GET` | `/` | Serves Static UI (index.html/js) |
+| `GET` | `/api/products` | List all products (Static) |
+| `GET` | `/api/products/{id}` | Get product details (Static) |
 
 ---
 
@@ -109,9 +100,8 @@ The Trusted Agent Protocol (TAP) system consists of four main components designe
     -   Extracts `keyId`.
     -   Fetches Public Key (JWK) from **Agent Registry** (`GET /keys/{keyId}`).
     -   Verifies Signature & Nonce using `@interledger/http-signature-utils`.
-    -   *If Valid*: Forwards request to **Merchant Frontend** (`localhost:3000`).
-    -   **Merchant Frontend** calls **Merchant Backend** (`/api/products/1`).
-    -   **CDN Proxy** forwards API request.
+    -   *If Valid*: Forwards request to **Merchant Service** (`localhost:3000`).
+    -   **Merchant Service** serves the UI or API response.
 
 ## System Diagrams
 
@@ -122,8 +112,7 @@ sequenceDiagram
     participant A as TAP Agent (Bun/TS)
     participant C as CDN Proxy (3001)
     participant R as Agent Registry (9002)
-    participant F as Merchant Frontend (3000)
-    participant B as Merchant Backend (8000)
+    participant M as Merchant Service (3000)
     
     Note over A, R: Prerequisite: Keys provisioned via JWK
     
@@ -134,10 +123,9 @@ sequenceDiagram
     C->>R: GET /keys/{keyId}
     R-->>C: 200 OK (Public Key JWK)
     C->>C: Verify Signature
-    C->>F: Forward Request
-    F->>B: GET /api/products/1
-    B-->>F: Product Data
-    F-->>A: Render Page
+    C->>M: Forward Request
+    M-->>C: UI/Data
+    C-->>A: Response
     end
 ```
 
@@ -160,12 +148,9 @@ graph TD
     end
 
     subgraph "Merchant System"
-        Backend["Merchant Backend (Bun/TS) :8000"]
-        Frontend["Merchant Frontend (VanJS) :3000"]
-        
+        Merchant["Merchant Service (Bun/TS) :3000\n(API + Static UI)"]
     end
 
     Agent -->|2. Signed Request| Proxy
-    Proxy -->|3a. Proxy API| Backend
-    Proxy -->|3b. Proxy UI| Frontend
+    Proxy -->|3. Proxy Traffic| Merchant
 ```

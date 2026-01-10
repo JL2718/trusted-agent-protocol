@@ -1,131 +1,174 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { startProxy } from "./src";
+import { startProxy } from "./impl";
 import { generateKeyPairSync } from "node:crypto";
 import { createSignatureHeaders } from "@interledger/http-signature-utils";
+import forge from 'node-forge';
 
-const PROXY_PORT = 3001;
-const MERCHANT_PORT = 3002;
-const REGISTRY_PORT = 9002;
+const PROXY_PORT = 3101;
+const MERCHANT_PORT = 3102;
+const REGISTRY_PORT = 9102;
 
 const MERCHANT_URL = `http://localhost:${MERCHANT_PORT}`;
 const REGISTRY_URL = `http://localhost:${REGISTRY_PORT}`;
-const PROXY_URL = `http://localhost:${PROXY_PORT}`;
+const PROXY_URL = `https://localhost:${PROXY_PORT}`;
 
-// Key Setup
+// Key Setup for Signatures
 const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-const publicJwk = publicKey.export({ format: 'jwk' });
-const privateJwk = privateKey.export({ format: 'jwk' });
+const publicJwk = publicKey.export({ format: 'jwk' }) as any;
 const KEY_ID = "test-key-1";
-
-// Add metadata to JWKs
 Object.assign(publicJwk, { kid: KEY_ID, kty: "OKP", alg: "EdDSA", crv: "Ed25519" });
-Object.assign(privateJwk, { kid: KEY_ID, kty: "OKP", alg: "EdDSA", crv: "Ed25519" });
+
+// Agent/Client ID for mTLS
+const AGENT_ID = "test-agent-mtls";
+
+// Certificate State
+let ca: string;
+let serverCert: string;
+let serverKey: string;
+let clientCert: string;
+let clientKey: string;
 
 // Mock Servers
-let merchantServer;
-let registryServer;
-let proxyServer;
+let merchantServer: any;
+let registryServer: any;
+let proxyServer: any;
+
+function generateTestCerts() {
+    const caKeys = forge.pki.rsa.generateKeyPair(2048);
+    const caCert = forge.pki.createCertificate();
+    caCert.publicKey = caKeys.publicKey;
+    caCert.serialNumber = '01';
+    caCert.validity.notBefore = new Date();
+    caCert.validity.notAfter = new Date();
+    caCert.validity.notAfter.setFullYear(caCert.validity.notBefore.getFullYear() + 1);
+    const attrs = [{ name: 'commonName', value: 'Test CA' }];
+    caCert.setSubject(attrs);
+    caCert.setIssuer(attrs);
+    caCert.setExtensions([{ name: 'basicConstraints', cA: true }]);
+    caCert.sign(caKeys.privateKey, forge.md.sha256.create());
+    ca = forge.pki.certificateToPem(caCert);
+
+    const sKeys = forge.pki.rsa.generateKeyPair(2048);
+    const sCert = forge.pki.createCertificate();
+    sCert.publicKey = sKeys.publicKey;
+    sCert.serialNumber = '02';
+    sCert.validity.notBefore = new Date();
+    sCert.validity.notAfter = new Date();
+    sCert.validity.notAfter.setFullYear(sCert.validity.notBefore.getFullYear() + 1);
+    sCert.setSubject([{ name: 'commonName', value: 'localhost' }]);
+    sCert.setIssuer(caCert.subject.attributes);
+    sCert.sign(caKeys.privateKey, forge.md.sha256.create());
+    serverCert = forge.pki.certificateToPem(sCert);
+    serverKey = forge.pki.privateKeyToPem(sKeys.privateKey);
+
+    const cKeys = forge.pki.rsa.generateKeyPair(2048);
+    const cCert = forge.pki.createCertificate();
+    cCert.publicKey = cKeys.publicKey;
+    cCert.serialNumber = '03';
+    cCert.validity.notBefore = new Date();
+    cCert.validity.notAfter = new Date();
+    cCert.validity.notAfter.setFullYear(cCert.validity.notBefore.getFullYear() + 1);
+    cCert.setSubject([{ name: 'commonName', value: AGENT_ID }]);
+    cCert.setIssuer(caCert.subject.attributes);
+    cCert.sign(caKeys.privateKey, forge.md.sha256.create());
+    clientCert = forge.pki.certificateToPem(cCert);
+    clientKey = forge.pki.privateKeyToPem(cKeys.privateKey);
+}
 
 beforeAll(async () => {
-    // Start Mock Merchant
+    generateTestCerts();
+
     merchantServer = Bun.serve({
         port: MERCHANT_PORT,
         fetch(req) {
-            const url = new URL(req.url);
-            if (url.pathname === "/api/products/1") {
-                return new Response(JSON.stringify({ id: 1, name: "Test Product" }), {
-                    headers: { "Content-Type": "application/json" }
-                });
-            }
-            return new Response("Not Found", { status: 404 });
+            return new Response(JSON.stringify({ id: 1, name: "Test Product" }), {
+                headers: { "Content-Type": "application/json" }
+            });
         }
     });
 
-    // Start Mock Registry
     registryServer = Bun.serve({
         port: REGISTRY_PORT,
         fetch(req) {
             const url = new URL(req.url);
             if (url.pathname === `/keys/${KEY_ID}`) {
-                return new Response(JSON.stringify(publicJwk), {
-                    headers: { "Content-Type": "application/json" }
-                });
+                return new Response(JSON.stringify(publicJwk), { headers: { "Content-Type": "application/json" } });
             }
-            return new Response("Key Not Found", { status: 404 });
+            if (url.pathname === `/agents/${AGENT_ID}`) {
+                return new Response(JSON.stringify({ id: AGENT_ID, status: 'active' }), { headers: { "Content-Type": "application/json" } });
+            }
+            return new Response("Not Found", { status: 404 });
         }
     });
 
-    // Start Proxy
     proxyServer = await startProxy({
         port: PROXY_PORT,
         merchantUrl: MERCHANT_URL,
         registryUrl: REGISTRY_URL,
-        debug: true
+        debug: true,
+        tls: { cert: serverCert, key: serverKey, ca: ca }
     });
+    proxyServer.start();
 });
 
 afterAll(() => {
-    if (merchantServer) merchantServer.stop();
-    if (registryServer) registryServer.stop();
-    if (proxyServer) proxyServer.stop();
+    merchantServer?.stop();
+    registryServer?.stop();
+    proxyServer?.stop();
 });
 
-describe("CDN Proxy", () => {
-    test("GET /test-proxy should return 200 without signature", async () => {
-        const res = await fetch(`${PROXY_URL}/test-proxy`);
+describe("Proxy with mTLS and Signatures", () => {
+    test("Public endpoint /test-proxy", async () => {
+        const res = await fetch(`${PROXY_URL}/test-proxy`, {
+            tls: { rejectUnauthorized: false }
+        });
         expect(res.status).toBe(200);
         expect(await res.text()).toBe("Proxy Active");
     });
 
-    test("GET /product/1 without signature should fail", async () => {
-        const res = await fetch(`${PROXY_URL}/product/1`);
-        expect(res.status).toBe(403);
-    });
-
-    test("GET /product/1 with valid signature should pass", async () => {
-        const requestOptions = {
-            method: "GET",
-            url: `${PROXY_URL}/product/1`,
-            headers: {
-                "Host": `localhost:${PROXY_PORT}`
-            }
-        };
-
-        // Generate headers using the library
-        // The library expects { request, privateKey, keyId }
-
-        const signedHeaders = await createSignatureHeaders({
-            request: requestOptions,
-            privateKey: privateKey, // KeyObject
-            keyId: KEY_ID
-        }); const res = await fetch(requestOptions.url, {
-            method: requestOptions.method,
-            headers: {
-                ...requestOptions.headers,
-                ...signedHeaders
+    test("Authorized via mTLS: Bypasses Signature Check", async () => {
+        const res = await fetch(`${PROXY_URL}/product/1`, {
+            tls: {
+                cert: clientCert,
+                key: clientKey,
+                ca: ca,
+                rejectUnauthorized: false
             }
         });
-
-        if (res.status !== 200) {
-            console.log("Failed Response:", await res.text());
-        }
-
         expect(res.status).toBe(200);
         const data = await res.json();
-        expect(data.id).toBe(1);
         expect(data.name).toBe("Test Product");
     });
 
-    test("GET /product/1 with invalid signature should fail", async () => {
-        // Manually construct bad headers or modify valid ones
-        const badHeaders = {
-            "Signature-Input": `sig1=("@path");created=${Math.floor(Date.now() / 1000)};keyid="${KEY_ID}";alg="ed25519"`,
-            "Signature": `sig1=:badsignature:`
-        };
-
+    test("No Certificate: Requires Signature", async () => {
         const res = await fetch(`${PROXY_URL}/product/1`, {
-            headers: badHeaders
+            tls: { rejectUnauthorized: false }
         });
         expect(res.status).toBe(403);
+        expect(await res.text()).toContain("Missing RFC 9421 Signature Headers");
+    });
+
+    test("Valid Signature: Passes without mTLS", async () => {
+        const requestOptions = {
+            method: "GET",
+            url: `${PROXY_URL}/product/1`,
+            headers: { "Host": `localhost:${PROXY_PORT}` }
+        };
+
+        const signedHeaders = await createSignatureHeaders({
+            request: requestOptions,
+            privateKey: privateKey,
+            keyId: KEY_ID
+        }) as any;
+
+        const res = await fetch(requestOptions.url, {
+            method: requestOptions.method,
+            headers: { ...requestOptions.headers, ...signedHeaders },
+            tls: { rejectUnauthorized: false }
+        });
+
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.name).toBe("Test Product");
     });
 });

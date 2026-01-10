@@ -10,6 +10,15 @@ export interface ProxyConfig {
     registryUrl: string;
     /** Enable debug logging */
     debug?: boolean;
+    /** TLS Options for HTTPS/mTLS */
+    tls?: {
+        /** Server certificate (PEM) */
+        cert: string;
+        /** Server private key (PEM) */
+        key: string;
+        /** Trusted CA certificates for client verification (PEM) */
+        ca?: string;
+    };
 }
 
 /**

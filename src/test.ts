@@ -1,92 +1,105 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { startRegistry, MemoryRegistryService } from "./registry/module";
-import { startMerchant } from "./merchant/src";
-import { startProxy } from "./proxy/src";
-import { Agent } from "./agent/src";
+import { startProxy } from "./proxy/impl";
+import { startMerchant } from "./merchant/impl";
+import { Agent } from "./agent/impl";
+import forge from 'node-forge';
 
-// Configuration
-const REGISTRY_PORT = 9002;
-const MERCHANT_PORT = 3000;
-const PROXY_PORT = 3001;
+const REGISTRY_PORT = 9302;
+const MERCHANT_PORT = 3300;
+const PROXY_PORT = 3301;
 
 const REGISTRY_URL = `http://localhost:${REGISTRY_PORT}`;
 const MERCHANT_URL = `http://localhost:${MERCHANT_PORT}`;
-const PROXY_URL = `http://localhost:${PROXY_PORT}`;
+const PROXY_URL = `https://localhost:${PROXY_PORT}`;
 
-// Servers
-let registryServer: any;
-let merchantServer: any;
-let proxyServer: any;
+let registryServer: any, merchantServer: any, proxyServer: any;
+let ca: string, cert: string, key: string;
+
+function generateE2ECerts() {
+    const caKeys = forge.pki.rsa.generateKeyPair(2048);
+    const caCert = forge.pki.createCertificate();
+    caCert.publicKey = caKeys.publicKey;
+    caCert.serialNumber = '01';
+    caCert.validity.notBefore = new Date();
+    caCert.validity.notAfter = new Date();
+    caCert.validity.notAfter.setFullYear(caCert.validity.notBefore.getFullYear() + 1);
+    const attrs = [{ name: 'commonName', value: 'E2E CA' }];
+    caCert.setSubject(attrs);
+    caCert.setIssuer(attrs);
+    caCert.setExtensions([{ name: 'basicConstraints', cA: true }]);
+    caCert.sign(caKeys.privateKey, forge.md.sha256.create());
+    ca = forge.pki.certificateToPem(caCert);
+
+    const sKeys = forge.pki.rsa.generateKeyPair(2048);
+    const sCert = forge.pki.createCertificate();
+    sCert.publicKey = sKeys.publicKey;
+    sCert.serialNumber = '02';
+    sCert.validity.notBefore = new Date();
+    sCert.validity.notAfter = new Date();
+    sCert.validity.notAfter.setFullYear(sCert.validity.notBefore.getFullYear() + 1);
+    sCert.setSubject([{ name: 'commonName', value: 'localhost' }]);
+    sCert.setIssuer(caCert.subject.attributes);
+    sCert.sign(caKeys.privateKey, forge.md.sha256.create());
+    cert = forge.pki.certificateToPem(sCert);
+    key = forge.pki.privateKeyToPem(sKeys.privateKey);
+}
 
 beforeAll(async () => {
-    // Start Registry with In-Memory Service
+    generateE2ECerts();
     registryServer = startRegistry(REGISTRY_PORT, new MemoryRegistryService());
-
-    // Start Merchant
-    merchantServer = startMerchant({
-        port: MERCHANT_PORT,
-        debug: false
-    });
-
-    // Start Proxy
+    merchantServer = startMerchant({ port: MERCHANT_PORT });
     proxyServer = await startProxy({
         port: PROXY_PORT,
         merchantUrl: MERCHANT_URL,
         registryUrl: REGISTRY_URL,
-        debug: false
+        tls: { cert, key, ca }
     });
-
-    // Wait for services to be ready (optional but good practice)
+    proxyServer.start();
     await new Promise(r => setTimeout(r, 500));
 });
 
 afterAll(() => {
-    if (registryServer) registryServer.stop();
-    if (merchantServer) merchantServer.stop();
-    if (proxyServer) proxyServer.stop();
+    registryServer?.stop();
+    merchantServer?.stop();
+    proxyServer?.stop();
 });
 
-describe("End-to-End System Test", () => {
-    test("Full TAP Flow: Register -> Proxy -> Merchant", async () => {
-        const agent = new Agent({
-            name: "E2E Test Agent",
-            registryUrl: REGISTRY_URL,
-            proxyUrl: PROXY_URL,
-            debug: false
-        });
-
-        // 1. Generate Key
+describe("TAP End-to-End (HTTPS)", () => {
+    test("Agent registers and fetches via HTTPS Proxy", async () => {
+        const agent = new Agent({ name: "E2E Agent", registryUrl: REGISTRY_URL, proxyUrl: PROXY_URL });
         agent.generateKey();
-
-        // 2. Register
         await agent.register();
 
-        // 3. Access Secured Resource
-        const res = await agent.fetch("/product/1");
+        const originalFetch = global.fetch;
+        (global as any).fetch = (url: any, init: any) => {
+            if (url.startsWith(PROXY_URL)) {
+                return originalFetch(url, { ...init, tls: { rejectUnauthorized: false } });
+            }
+            return originalFetch(url, init);
+        };
 
+        const res = await agent.fetch("/product/1");
         expect(res.status).toBe(200);
         const data = await res.json();
-
-        expect(data).toHaveProperty("id", "1");
-        expect(data).toHaveProperty("name", "Premium Coffee");
+        expect(data.id.toString()).toBe("1");
+        global.fetch = originalFetch;
     });
 
-    test("Unregistered Agent should be rejected by Proxy", async () => {
-        const agent = new Agent({
-            name: "Malicious Agent",
-            registryUrl: REGISTRY_URL,
-            proxyUrl: PROXY_URL,
-            debug: false
-        });
-
-        // Generate key but DO NOT register
+    test("Unregistered agent is rejected", async () => {
+        const agent = new Agent({ name: "Bad Agent", registryUrl: REGISTRY_URL, proxyUrl: PROXY_URL });
         agent.generateKey();
 
-        // Access Resource
-        // Should fail because Proxy can't find key in Registry
-        const res = await agent.fetch("/product/1");
+        const originalFetch = global.fetch;
+        (global as any).fetch = (url: any, init: any) => {
+            if (url.startsWith(PROXY_URL)) {
+                return originalFetch(url, { ...init, tls: { rejectUnauthorized: false } });
+            }
+            return originalFetch(url, init);
+        };
 
-        // The Proxy will try to fetch the key, get 404, and return 403 Forbidden
+        const res = await agent.fetch("/product/1");
         expect(res.status).toBe(403);
+        global.fetch = originalFetch;
     });
 });

@@ -1,7 +1,27 @@
 import { validateSignature } from '@interledger/http-signature-utils';
-import { ProxyConfig, ProxyService } from './interface';
+import { createPublicKey } from 'node:crypto';
+import forge from 'node-forge';
+import type { ProxyConfig, ProxyService } from './interface';
 
 export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
+
+    // 1. Fetch Root CA from Authority
+    console.log(`[Proxy] Fetching Root CA from ${config.authorityUrl}...`);
+    let rootCaCert: forge.pki.Certificate;
+
+    try {
+        const caRes = await fetch(`${config.authorityUrl}/ca`);
+        if (!caRes.ok) throw new Error(`Failed to fetch Root CA: ${caRes.status}`);
+        const caData = await caRes.json() as any;
+        rootCaCert = forge.pki.certificateFromPem(caData.certificate);
+        console.log(`[Proxy] Root CA Loaded. Subject: ${rootCaCert.subject.attributes.find(a => a.name === 'commonName')?.value}`);
+    } catch (e: any) {
+        console.error(`[Proxy] CRITICAL: Could not load Root CA: ${e.message}`);
+        // For demo stability, we might want to retry or exit. 
+        // We'll throw to fail fast.
+        throw e;
+    }
+
     const server = Bun.serve({
         port: config.port,
         async fetch(req) {
@@ -17,58 +37,52 @@ export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
                 console.log(`[Proxy] ${req.method} ${url.pathname}`);
             }
 
-            // 3. Signature Verification
+            // 3. Signature & Certificate Verification
             try {
-                const signatureInput = req.headers.get('Signature-Input');
-                const signature = req.headers.get('Signature');
+                // A. Extract Client Certificate Header
+                // RFC 9440: Client-Cert: :Base64:
+                const clientCertHeader = req.headers.get('Client-Cert');
+                if (!clientCertHeader) throw new Error("Missing Client-Cert Header");
 
-                if (!signatureInput || !signature) {
-                    throw new Error("Missing RFC 9421 Signature Headers");
+                // Parse Byte Sequence format (colon wrapped)
+                const b64 = clientCertHeader.replace(/^:/, '').replace(/:$/, '');
+                const der = forge.util.decode64(b64);
+                const asn1 = forge.asn1.fromDer(der);
+                const clientCert = forge.pki.certificateFromAsn1(asn1);
+
+                // B. Verify Certificate against Root CA
+                // note: verify() checks signature. We also should check validity period.
+                const verified = rootCaCert.verify(clientCert);
+                if (!verified) throw new Error("Client Certificate validation failed (Signature Invalid)");
+
+                const now = new Date();
+                if (now < clientCert.validity.notBefore || now > clientCert.validity.notAfter) {
+                    throw new Error("Client Certificate Expired or Not Yet Valid");
                 }
 
-                // Extract KeyID manually for simplicity
-                const keyIdMatch = signatureInput.match(/keyid="([^"]+)"/);
-                if (!keyIdMatch) throw new Error("KeyID not found in Signature-Input");
-                const keyId = keyIdMatch[1];
+                if (config.debug) console.log(`[Proxy] Client Cert Verified. Subject: ${clientCert.subject.getField('CN')?.value}`);
 
-                // Fetch Key from Registry
-                const keyUrl = `${config.registryUrl}/keys/${keyId}`;
-                const keyRes = await fetch(keyUrl);
+                // C. Extract Public Key for Signature Verification
+                const publicKeyPem = forge.pki.publicKeyToPem(clientCert.publicKey as forge.pki.PublicKey);
+                const cryptoKey = createPublicKey(publicKeyPem);
+                const jwk = cryptoKey.export({ format: 'jwk' });
+                Object.assign(jwk, { alg: 'PS512', use: 'sig' });
 
-                if (!keyRes.ok) {
-                    console.error(`[Proxy] Key lookup failed for ${keyId}: ${keyRes.status}`);
-                    throw new Error("Public Key not found");
-                }
-
-                const jwk = await keyRes.json();
-
-                // Construct Request Object for Library
-                // The library likely expects { method, url, headers }
-                // Headers should be a plain object with lowercase keys
-                const headersObj: Record<string, string> = {};
-                req.headers.forEach((v, k) => {
-                    headersObj[k.toLowerCase()] = v;
-                });
-
+                // D. Verify HTTP Signature
                 const requestForLib = {
                     method: req.method,
                     url: req.url,
-                    headers: headersObj
+                    headers: Object.fromEntries(req.headers.entries())
                 };
 
-                if (config.debug) {
-                    console.log("[Proxy] Validating Request:", JSON.stringify(requestForLib, null, 2));
+                // Pass JWK directly
+                const verificationResult = await validateSignature(jwk as any, requestForLib);
+
+                if (!verificationResult || (typeof verificationResult === 'object' && 'valid' in verificationResult && !verificationResult.valid)) {
+                    throw new Error("HTTP Signature Invalid");
                 }
 
-                // Verify
-                const result = await validateSignature(jwk, requestForLib);                // Check result - assuming it returns { valid: boolean, ... } or boolean
-                // Based on common patterns. If it throws, the catch block handles it.
-                // If it returns boolean:
-                if (result === false) throw new Error("Signature Validation Returned False");
-                // If it returns object:
-                if (typeof result === 'object' && result !== null && 'valid' in result && !result.valid) {
-                    throw new Error("Signature Invalid: " + (result.reason || "Unknown"));
-                }
+                if (config.debug) console.log(`[Proxy] Signature Verified!`);
 
             } catch (e: any) {
                 if (config.debug) console.error(`[Proxy] Verification Error: ${e.message}`);
@@ -105,7 +119,7 @@ export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
     });
 
     return {
-        start: () => { }, // Bun serve starts auto
+        start: () => { },
         stop: () => { server.stop(); }
     };
 }

@@ -1,108 +1,115 @@
-import { generateKeyPairSync } from 'node:crypto';
+import { createPrivateKey } from 'node:crypto';
 import { createSignatureHeaders } from '@interledger/http-signature-utils';
-import { AgentConfig } from './interface';
+import forge from 'node-forge';
+import type { AgentConfig } from './interface';
 
 export class Agent {
     private config: AgentConfig;
-    private keyId: string | null = null;
-    private agentId: string | null = null;
-    private keyPair: { publicKey: any; privateKey: any; publicJwk: any; privateJwk: any } | null = null;
+    public keyId: string | null = null;
+    public certificate: string | null = null;
+    private keyPair: { privateKey: forge.pki.PrivateKey; publicKey: forge.pki.PublicKey } | null = null;
+    private privateKeyPem: string | null = null;
 
     constructor(config: AgentConfig) {
         this.config = config;
     }
 
     /**
-     * Generates a new Ed25519 Key Pair
+     * Generates a new RSA 2048 Key Pair (using node-forge)
+     * RSA is chosen for broad compatibility with X.509 and widely supported in CSRs.
      */
     public generateKey(keyId: string = 'primary-key') {
-        if (this.config.debug) console.log(`[Agent] Generating Ed25519 key pair...`);
+        if (this.config.debug) console.log(`[Agent] Generating RSA 2048 key pair...`);
 
-        const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-        const publicJwk = publicKey.export({ format: 'jwk' });
-        const privateJwk = privateKey.export({ format: 'jwk' });
-
-        // Add required metadata for TAP
-        Object.assign(publicJwk, { kid: keyId, kty: 'OKP', alg: 'EdDSA', crv: 'Ed25519', use: 'sig' });
-        Object.assign(privateJwk, { kid: keyId, kty: 'OKP', alg: 'EdDSA', crv: 'Ed25519', use: 'sig' });
+        const keys = forge.pki.rsa.generateKeyPair(2048);
 
         this.keyId = keyId;
-        this.keyPair = { privateKey, publicKey, publicJwk, privateJwk };
+        this.keyPair = keys;
+        this.privateKeyPem = forge.pki.privateKeyToPem(keys.privateKey);
 
         if (this.config.debug) console.log(`[Agent] Key generated. KeyID: ${keyId}`);
     }
 
     /**
-     * Registers the agent and key with the Registry
+     * Onboards the agent by getting a Certificate from the Authority
      */
     public async register() {
-        if (!this.keyPair) throw new Error("No keys generated. Call generateKey() first.");
+        if (!this.keyPair || !this.privateKeyPem) throw new Error("No keys generated. Call generateKey() first.");
+        const AUTHORITY_URL = this.config.authorityUrl;
 
-        if (this.config.debug) console.log(`[Agent] Registering with ${this.config.registryUrl}...`);
+        if (this.config.debug) console.log(`[Agent] Requesting Certificate from Authority at ${AUTHORITY_URL}...`);
 
-        // 1. Create Agent
-        const agentRes = await fetch(`${this.config.registryUrl}/agents`, {
+        // 1. Generate CSR
+        const csr = forge.pki.createCertificationRequest();
+        csr.publicKey = this.keyPair.publicKey;
+        csr.setSubject([{ name: 'commonName', value: this.config.name }]);
+        csr.sign(this.keyPair.privateKey as any, forge.md.sha256.create());
+
+        const csrPem = forge.pki.certificationRequestToPem(csr);
+
+        // 2. Submit CSR
+        const res = await fetch(`${AUTHORITY_URL}/sign`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                name: this.config.name,
-                domain: "https://agent.example.com",
-                jwk: this.keyPair.publicJwk
-            })
+            body: JSON.stringify({ csr: csrPem })
         });
 
-        if (!agentRes.ok) {
-            const txt = await agentRes.text();
-            throw new Error(`Registration failed: ${agentRes.status} ${txt}`);
+        if (!res.ok) {
+            const txt = await res.text();
+            throw new Error(`Authority Error: ${res.status} ${txt}`);
         }
 
-        const agentData = await agentRes.json();
-        this.agentId = agentData.id;
-        if (this.config.debug) console.log(`[Agent] Registered. AgentID: ${this.agentId}`);
+        const data = await res.json() as any;
+        this.certificate = data.certificate;
+
+        if (this.config.debug) console.log(`[Agent] Certificate Acquired!`);
     }
 
     /**
      * Makes a signed request to the Proxy
      */
     public async fetch(path: string, options: RequestInit = {}) {
-        if (!this.keyPair || !this.keyId) throw new Error("Not initialized");
+        if (!this.privateKeyPem || !this.certificate) throw new Error("Not initialized (Missing Keys or Cert)");
 
         const method = options.method || 'GET';
         const url = `${this.config.proxyUrl}${path}`;
-
-        // Parse URL to get host for signing
         const urlObj = new URL(url);
 
         if (this.config.debug) console.log(`[Agent] Requesting ${method} ${url}...`);
 
-        // Prepare Request Options for Signing
-        const requestToSign = {
-            method,
-            url,
-            headers: {
-                host: urlObj.host,
-                ...options.headers
-            }
+        // Prepare Certificate Header (RFC 9440)
+        // Format: :<Base64 DER>:
+        const certObj = forge.pki.certificateFromPem(this.certificate);
+        const certDer = forge.asn1.toDer(forge.pki.certificateToAsn1(certObj)).getBytes();
+        const certB64 = forge.util.encode64(certDer);
+        const clientCertHeader = `:${certB64}:`;
+
+        // Headers to sign
+        const headersToSign: Record<string, string> = {
+            host: urlObj.host,
+            'client-cert': clientCertHeader, // Include cert in signature!
+            ...(options.headers as Record<string, string> || {})
         };
 
+        // Node crypto private key for interledger lib
+        const cryptoKey = createPrivateKey(this.privateKeyPem);
+
         // Generate Signatures
-        // Note: passing the KeyObject (privateKey) as discovered in Proxy tests
         const signedHeaders = await createSignatureHeaders({
-            request: requestToSign,
-            privateKey: this.keyPair.privateKey,
-            keyId: this.keyId
+            request: { method, url, headers: headersToSign },
+            privateKey: cryptoKey,
+            keyId: "primary-key" // Key ID can be anything or matching cert KID.
         });
 
         // Merge headers
-        const headers = {
-            ...options.headers,
+        const finalHeaders = {
+            ...headersToSign,
             ...signedHeaders
         };
 
-        // Execute Request
         return fetch(url, {
             ...options,
-            headers
+            headers: finalHeaders as any
         });
     }
 }

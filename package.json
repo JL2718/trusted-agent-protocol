@@ -13,16 +13,19 @@
         "test:merchant": "bun test ./src/merchant/test.ts",
         "agent": "bun run src/agent/module.ts",
         "test:agent": "bun test ./src/agent/test.ts",
+        "authority": "bun run src/authority/module.ts",
         "test:e2e": "bun test ./src/test.ts"
     },
     "private": true,
     "devDependencies": {
-        "@types/bun": "latest"
+        "@types/bun": "latest",
+        "@types/node-forge": "^1.3.0"
     },
     "peerDependencies": {
         "typescript": "^5"
     },
     "dependencies": {
-        "@interledger/http-signature-utils": "^2.0.3"
+        "@interledger/http-signature-utils": "^2.0.3",
+        "node-forge": "^1.3.0"
     }
 }

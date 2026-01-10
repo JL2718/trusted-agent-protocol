@@ -6,8 +6,8 @@ export interface ProxyConfig {
     port: number;
     /** URL of the upstream Merchant Service */
     merchantUrl: string;
-    /** URL of the Agent Registry Service */
-    registryUrl: string;
+    /** URL of the Authority Service (for Root CA) */
+    authorityUrl: string;
     /** Enable debug logging */
     debug?: boolean;
 }

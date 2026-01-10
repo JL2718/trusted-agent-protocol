@@ -6,9 +6,11 @@
       "name": "trusted-agent-protocol",
       "dependencies": {
         "@interledger/http-signature-utils": "^2.0.3",
+        "node-forge": "^1.3.0",
       },
       "devDependencies": {
         "@types/bun": "latest",
+        "@types/node-forge": "^1.3.0",
       },
       "peerDependencies": {
         "typescript": "^5",
@@ -22,6 +24,8 @@
 
     "@types/node": ["@types/node@25.0.5", "", { "dependencies": { "undici-types": "~7.16.0" } }, "sha512-FuLxeLuSVOqHPxSN1fkcD8DLU21gAP7nCKqGRJ/FglbCUBs0NYN6TpHcdmyLeh8C0KwGIaZQJSv+OYG+KZz+Gw=="],
 
+    "@types/node-forge": ["@types/node-forge@1.3.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-mhVF2BnD4BO+jtOp7z1CdzaK4mbuK0LLQYAvdOLqHTavxFNq4zA1EmYkpnFjP8HOUzedfQkRnp0E2ulSAYSzAw=="],
+
     "bun-types": ["bun-types@1.3.5", "", { "dependencies": { "@types/node": "*" } }, "sha512-inmAYe2PFLs0SUbFOWSVD24sg1jFlMPxOjOSSCYqUgn4Hsc3rDc7dFvfVYjFPNHtov6kgUeulV4SxbuIV/stPw=="],
 
     "http-message-signatures": ["http-message-signatures@1.0.4", "", { "dependencies": { "structured-headers": "^1.0.1" } }, "sha512-gavCQWnxHFg0BVlKs6CmYK7hNSH1o0x0mHTC68yBAHYOYuTVXPv52mEE7QuT5TenfiagTdOa/zPJzen4lEX7Rg=="],
@@ -29,6 +33,8 @@
     "httpbis-digest-headers": ["httpbis-digest-headers@1.0.0", "", { "dependencies": { "structured-headers": "^0.5.0" } }, "sha512-RpaFuZD3tG8wtsvjDv1u7O8wAvfpAxS20F3CrFPZOMn+IBb7E7yiqlN5Tks4E5tBEnTdpMOD151rJsUv03sAIg=="],
 
     "jose": ["jose@4.15.9", "", {}, "sha512-1vUQX+IdDMVPj4k8kOxgUqlcK518yluMuGZwqlr44FS1ppZB/5GWh4rZG89erpOBOJjU/OBsnCVFfapsRz6nEA=="],
+
+    "node-forge": ["node-forge@1.3.3", "", {}, "sha512-rLvcdSyRCyouf6jcOIPe/BgwG/d7hKjzMKOas33/pHEr6gbq18IK9zV7DiPvzsz0oBJPme6qr6H6kGZuI9/DZg=="],
 
     "structured-headers": ["structured-headers@1.0.1", "", {}, "sha512-QYBxdBtA4Tl5rFPuqmbmdrS9kbtren74RTJTcs0VSQNVV5iRhJD4QlYTLD0+81SBwUQctjEQzjTRI3WG4DzICA=="],
 

@@ -1,7 +1,7 @@
 # System Architecture & Protocol Description
 
 ## System Overview
-The Trusted Agent Protocol (TAP) system consists of four main components designed to facilitate secure, authenticated interactions between AI Agents and Merchant systems using RFC 9421 HTTP Message Signatures. The architecture enforces identity verification at the edge (CDN Proxy) before traffic reaches the Merchant application.
+The Trusted Agent Protocol (TAP) system consists of five main components designed to facilitate secure, authenticated interactions between AI Agents and Merchant systems using RFC 9421 HTTP Message Signatures and X.509 Certificates (RFC 9440). The architecture enforces identity verification at the edge (CDN Proxy) using a certificate-based trust model.
 
 **Tech Stack:**
 - **Runtime:** Bun
@@ -11,7 +11,16 @@ The Trusted Agent Protocol (TAP) system consists of four main components designe
 
 ## Components
 
-### 1. TAP Agent (Client)
+### 1. Authority (Certificate Issuer)
+- **Role**: Internal Certificate Authority (CA).
+- **Technology**: Bun, TypeScript, `node-forge`.
+- **Functionality**:
+  - Manages a Root CA key pair.
+  - Exposes an endpoint (`POST /sign`) to sign Certificate Signing Requests (CSRs).
+  - Issues X.509 certificates to Agents.
+  - Acts as the root of trust for the Proxy.
+
+### 2. TAP Agent (Client)
 - **Role**: The end-user acting as an autonomous agent.
 - **Technology**: Bun, TypeScript.
 - **Functionality**:
@@ -19,28 +28,32 @@ The Trusted Agent Protocol (TAP) system consists of four main components designe
   - Generates RFC 9421 `Signature` and `Signature-Input` headers using `@interledger/http-signature-utils`.
   - Interact with the Merchant via signed HTTP requests.
 
-### 2. CDN Proxy (Edge Security)
+### 3. CDN Proxy (Edge Security)
 - **Port**: `3001`
 - **Technology**: Bun, TypeScript.
 - **Role**: Gatekeeper / Reverse Proxy.
 - **Logic**:
   - Intercepts **all** incoming traffic.
-  - Parses RFC 9421 headers.
-  - Queries **Agent Registry** to fetch the public key (JWK) associated with the `keyId`.
-  - Verifies digital signatures using `@interledger/http-signature-utils`.
-  - Checks for replay attacks (Nonce cache) and expiration.
+  - Trusts the **Authority** Root CA certificate.
+  - Parses RFC 9421 headers and RFC 9440 `Client-Cert` headers.
+  - **Verification**:
+    - Validates the `Client-Cert` chain against the trusted Root CA.
+    - Checks certificate expiration.
+    - Extracts the Public Key from the validated certificate.
+    - Verifies the RFC 9421 `Signature` using the extracted key.
+  - Checks for replay attacks (Nonce cache).
   - Forwards valid requests to **Merchant Frontend** or **Merchant Backend**.
   - Rejects invalid requests (403 Forbidden).
 
-### 3. Agent Registry (Identity Provider)
+### 4. Agent Registry (Identity Provider)
 - **Port**: `9002`
 - **Technology**: Bun, TypeScript.
-- **Role**: Storage for Agent Identities and Public Keys.
+- **Role**: Directory of Agents (Legacy/Onboarding).
 - **Logic**:
   - Exposes API for Agent registration.
-  - Provides public API for the CDN Proxy to retrieve keys (JWKs) for verification.
+  - (Optional) Can facilitate CSR forwarding or initial agent bootstrapping.
 
-### 4. Merchant Service (Application)
+### 5. Merchant Service (Application)
 - **Port**: `3000`
 - **Technology**: Bun, TypeScript.
 - **Role**: Unified Resource Server & UI Host.
@@ -89,17 +102,21 @@ The Trusted Agent Protocol (TAP) system consists of four main components designe
 *The primary flow verifying the Trusted Agent Protocol.*
 
 1.  **Agent (Bun/TS)**:
-    -   Loads Keys from JWK.
+    -   Generates Key Pair (if new).
+    -   Generates CSR -> sends to **Authority** (`POST /sign`).
+    -   Receives Signed X.509 Certificate.
     -   Generates headers:
-        -   `Signature-Input`: `sig1=("@method" "@target-uri" "content-digest" "content-length" "content-type" "authorization");created=1618884473;keyid="test-key-rsa-pss"`
+        -   `Client-Cert`: `:<Base64 DER Cert>:`
+        -   `Signature-Input`: `sig1=("@method" "@target-uri" "content-digest" "authorization");created=...`
         -   `Signature`: `sig1=:...:`
     -   Navigates to `http://localhost:3001/product/1`.
 
 2.  **CDN Proxy (Edge)**:
     -   Intercepts request to `/product/1`.
-    -   Extracts `keyId`.
-    -   Fetches Public Key (JWK) from **Agent Registry** (`GET /keys/{keyId}`).
-    -   Verifies Signature & Nonce using `@interledger/http-signature-utils`.
+    -   Extracts `Client-Cert`.
+    -   **Verifies Certificate** against internal Trusted Root CA.
+    -   Extracts Public Key from Certificate.
+    -   **Verifies Signature** using extracted key.
     -   *If Valid*: Forwards request to **Merchant Service** (`localhost:3000`).
     -   **Merchant Service** serves the UI or API response.
 
@@ -109,24 +126,25 @@ The Trusted Agent Protocol (TAP) system consists of four main components designe
 
 ```mermaid
 sequenceDiagram
-    participant A as TAP Agent (Bun/TS)
+    participant A as TAP Agent
     participant C as CDN Proxy (3001)
-    participant R as Agent Registry (9002)
-    participant M as Merchant Service (3000)
+    participant Auth as Authority
+    participant M as Merchant (3000)
     
-    Note over A, R: Prerequisite: Keys provisioned via JWK
+    Note over A, Auth: Setup Phase
+    A->>Auth: POST /sign (CSR)
+    Auth-->>A: X.509 Certificate
     
-    rect rgba(0, 0, 0, 0)
     Note right of A: Authenticated View
-    A->>A: Sign Request (@authority, @path)
-    A->>C: GET /product/1 (Headers: Signature)
-    C->>R: GET /keys/{keyId}
-    R-->>C: 200 OK (Public Key JWK)
-    C->>C: Verify Signature
+    A->>A: Sign Request (with Cert)
+    A->>C: GET /product/1
+    Note right of C: Headers: Signature, Client-Cert
+    
+    C->>C: Verify Cert (Root CA)
+    C->>C: Verify Sig (Cert PubKey)
     C->>M: Forward Request
     M-->>C: UI/Data
     C-->>A: Response
-    end
 ```
 
 ## Internal Architecture
@@ -140,17 +158,16 @@ graph TD
 
     subgraph "Infrastructure Layer"
         Proxy["CDN Proxy (Bun/TS) :3001"]
-        Registry["Agent Registry (Bun/TS) :9002"]
-        DB_Reg[(Registry DB)]
+        Authority["Authority (Bun/TS)"]
         
-        Proxy -->|1. Fetch Key| Registry
-        Registry --> DB_Reg
+        Proxy -.->|Trusts| Authority
     end
 
     subgraph "Merchant System"
         Merchant["Merchant Service (Bun/TS) :3000\n(API + Static UI)"]
     end
 
-    Agent -->|2. Signed Request| Proxy
+    Agent -->|1. Setup (CSR)| Authority
+    Agent -->|2. Signed Req (+Cert)| Proxy
     Proxy -->|3. Proxy Traffic| Merchant
 ```

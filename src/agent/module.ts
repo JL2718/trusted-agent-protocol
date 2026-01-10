@@ -3,17 +3,20 @@ import { Agent } from './src';
 // Environment
 const REGISTRY_URL = process.env.AGENT_REGISTRY_URL || "http://localhost:9002";
 const PROXY_URL = process.env.CDN_PROXY_URL || "http://localhost:3001";
+const AUTHORITY_URL = process.env.AUTHORITY_URL || "http://localhost:9003";
 const DEBUG = process.env.DEBUG === "true";
 
 async function main() {
     console.log("=== TAP Agent Demo ===");
     console.log(`Registry: ${REGISTRY_URL}`);
     console.log(`Proxy: ${PROXY_URL}`);
+    console.log(`Authority: ${AUTHORITY_URL}`);
 
     const agent = new Agent({
         name: "Demo Agent " + Math.floor(Math.random() * 1000),
         registryUrl: REGISTRY_URL,
         proxyUrl: PROXY_URL,
+        authorityUrl: AUTHORITY_URL,
         debug: DEBUG
     });
 

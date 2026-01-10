@@ -5,6 +5,7 @@ export interface AgentConfig {
     registryUrl: string;
     /** URL of the CDN Proxy */
     proxyUrl: string;
+    authorityUrl: string;
     /** Enable debug logging */
     debug?: boolean;
 }

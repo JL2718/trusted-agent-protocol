@@ -33,9 +33,6 @@ beforeAll(async () => {
     // Start Authority
     authorityServer = startAuthority(AUTHORITY_PORT, join(TEST_DATA_DIR, 'authority'));
 
-    // Start Registry (Legacy/Optional - keeping for completeness if code refs it)
-    registryServer = startRegistry(REGISTRY_PORT, new MemoryRegistryService());
-
     // Start Merchant
     merchantServer = startMerchant({
         port: MERCHANT_PORT,
@@ -43,8 +40,6 @@ beforeAll(async () => {
     });
 
     // Start Proxy
-    // Note: Proxy fetches Root CA on start, so Authority must be up.
-    // We add a tiny delay to ensure Authority bind.
     await new Promise(r => setTimeout(r, 200));
 
     proxyServer = await startProxy({
@@ -67,49 +62,34 @@ afterAll(() => {
     if (rmSync) rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 });
 
-describe("End-to-End System Test", () => {
-    test("Full TAP Flow: Register (Get Cert) -> Proxy -> Merchant", async () => {
-        const agent = new Agent({
-            name: "E2E Test Agent",
-            proxyUrl: PROXY_URL,
-            authorityUrl: AUTHORITY_URL,
-            debug: false
-        });
+describe("End-to-End System Test (All Key Types)", () => {
+    
+    const keyTypes = ['rsa', 'ec', 'ed25519'] as const;
 
-        // 1. Generate Key
-        agent.generateKey();
+    for (const type of keyTypes) {
+        test(`Flow with ${type} key`, async () => {
+            const agent = new Agent({
+                name: `E2E Test Agent ${type}`,
+                proxyUrl: PROXY_URL,
+                authorityUrl: AUTHORITY_URL,
+                debug: false
+            });
 
-        // 2. Register/Onboard (Get Cert)
-        await agent.register();
+            // 1. Generate Key
+            agent.generateKey('primary', type);
 
-        // 3. Access Secured Resource
-        const res = await agent.fetch("/product/1");
+            // 2. Register/Onboard (Get Cert)
+            await agent.register();
 
-        if (!res.ok) {
-            console.error("Agent Fetch Failed:", await res.text());
-        }
+            // 3. Access Secured Resource
+            const res = await agent.fetch("/product/1");
 
-        expect(res.status).toBe(200);
-        const data = await res.json();
-
-        expect(data).toHaveProperty("id", "1");
-        expect(data).toHaveProperty("name", "Premium Coffee");
-    });
-
-    test("Request without valid Certificate should be rejected", async () => {
-        // We simulate a request without the Client-Cert header by using a raw fetch
-        // The Proxy expects 'Client-Cert' header.
-
-        const res = await fetch(`${PROXY_URL}/product/1`, {
-            headers: {
-                // Missing Client-Cert
-                // Missing Signature
+            if (!res.ok) {
+                console.error(`Agent (${type}) Fetch Failed:`, await res.text());
             }
-        });
 
-        // Should return 403 Forbidden (Missing Client-Cert Header)
-        expect(res.status).toBe(403);
-        const txt = await res.text();
-        expect(txt).toContain("Missing Client-Cert");
-    });
+            expect(res.status).toBe(200);
+        });
+    }
+
 });

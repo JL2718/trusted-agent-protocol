@@ -40,3 +40,5 @@ flake.nix
 data/*
 # AI
 GEMINI.md
+# keys
+*.pem

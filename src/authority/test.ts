@@ -16,8 +16,8 @@ describe("Authority Module", () => {
         if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     });
 
-    test("CertificateAuthority.loadOrGenerate creates new CA", () => {
-        const ca = CertificateAuthority.loadOrGenerate(TEST_DIR);
+    test("CertificateAuthority.loadOrGenerate creates new CA", async () => {
+        const ca = await CertificateAuthority.loadOrGenerate(TEST_DIR);
         expect(ca).toBeDefined();
         expect(ca.getCaCert()).toContain("BEGIN CERTIFICATE");
         
@@ -26,18 +26,18 @@ describe("Authority Module", () => {
         expect(existsSync(join(TEST_DIR, 'ca-cert.pem'))).toBe(true);
     });
 
-    test("CertificateAuthority loads existing CA", () => {
-        const ca1 = CertificateAuthority.loadOrGenerate(TEST_DIR);
+    test("CertificateAuthority loads existing CA", async () => {
+        const ca1 = await CertificateAuthority.loadOrGenerate(TEST_DIR);
         const cert1 = ca1.getCaCert();
 
-        const ca2 = CertificateAuthority.loadOrGenerate(TEST_DIR);
+        const ca2 = await CertificateAuthority.loadOrGenerate(TEST_DIR);
         const cert2 = ca2.getCaCert();
 
         expect(cert1).toEqual(cert2);
     });
 
-    test("CertificateAuthority signs CSR", () => {
-        const ca = CertificateAuthority.loadOrGenerate(TEST_DIR);
+    test("CertificateAuthority signs CSR", async () => {
+        const ca = await CertificateAuthority.loadOrGenerate(TEST_DIR);
 
         // Generate a Key Pair and CSR for a client
         const keys = forge.pki.rsa.generateKeyPair(2048);
@@ -48,7 +48,7 @@ describe("Authority Module", () => {
         const csrPem = forge.pki.certificationRequestToPem(csr);
 
         // Sign it
-        const certPem = ca.signCsr(csrPem);
+        const certPem = await ca.signCsr(csrPem);
         expect(certPem).toContain("BEGIN CERTIFICATE");
 
         // Verify the signed cert

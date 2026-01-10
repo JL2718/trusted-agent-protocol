@@ -5,8 +5,8 @@ import type { SignCsrRequest } from './interface';
 // Default Data Directory
 const DATA_DIR = join(import.meta.dir, '../../data/authority');
 
-export function startAuthority(port: number = 9003, dataDir: string = DATA_DIR) {
-    const ca = CertificateAuthority.loadOrGenerate(dataDir);
+export async function startAuthority(port: number = 9003, dataDir: string = DATA_DIR) {
+    const ca = await CertificateAuthority.loadOrGenerate(dataDir);
 
     console.log(`Authority Service starting on port ${port}...`);
 
@@ -42,7 +42,7 @@ export function startAuthority(port: number = 9003, dataDir: string = DATA_DIR) 
                     if (!body.csr) return new Response("Missing 'csr' field", { status: 400, headers: corsHeaders });
 
                     console.log("Received CSR signing request...");
-                    const clientCert = ca.signCsr(body.csr);
+                    const clientCert = await ca.signCsr(body.csr);
 
                     return new Response(JSON.stringify({
                         certificate: clientCert,

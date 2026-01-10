@@ -1,24 +1,22 @@
 import { validateSignature } from '@interledger/http-signature-utils';
-import { createPublicKey } from 'node:crypto';
-import forge from 'node-forge';
+import { X509Certificate } from 'node:crypto'; // Use Node's native X509 support for Verification
 import type { ProxyConfig, ProxyService } from './interface';
 
 export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
 
     // 1. Fetch Root CA from Authority
     console.log(`[Proxy] Fetching Root CA from ${config.authorityUrl}...`);
-    let rootCaCert: forge.pki.Certificate;
+    let rootCaCert: X509Certificate;
 
     try {
         const caRes = await fetch(`${config.authorityUrl}/ca`);
         if (!caRes.ok) throw new Error(`Failed to fetch Root CA: ${caRes.status}`);
         const caData = await caRes.json() as any;
-        rootCaCert = forge.pki.certificateFromPem(caData.certificate);
-        console.log(`[Proxy] Root CA Loaded. Subject: ${rootCaCert.subject.attributes.find(a => a.name === 'commonName')?.value}`);
+        // Load Root CA
+        rootCaCert = new X509Certificate(caData.certificate);
+        console.log(`[Proxy] Root CA Loaded. Subject: ${rootCaCert.subject}`);
     } catch (e: any) {
         console.error(`[Proxy] CRITICAL: Could not load Root CA: ${e.message}`);
-        // For demo stability, we might want to retry or exit. 
-        // We'll throw to fail fast.
         throw e;
     }
 
@@ -40,34 +38,33 @@ export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
             // 3. Signature & Certificate Verification
             try {
                 // A. Extract Client Certificate Header
-                // RFC 9440: Client-Cert: :Base64:
                 const clientCertHeader = req.headers.get('Client-Cert');
                 if (!clientCertHeader) throw new Error("Missing Client-Cert Header");
 
-                // Parse Byte Sequence format (colon wrapped)
+                // RFC 9440: :<Base64>:
                 const b64 = clientCertHeader.replace(/^:/, '').replace(/:$/, '');
-                const der = forge.util.decode64(b64);
-                const asn1 = forge.asn1.fromDer(der);
-                const clientCert = forge.pki.certificateFromAsn1(asn1);
+                const certPem = `-----BEGIN CERTIFICATE-----\n${b64}\n-----END CERTIFICATE-----`;
+                
+                const clientCert = new X509Certificate(certPem);
 
                 // B. Verify Certificate against Root CA
-                // note: verify() checks signature. We also should check validity period.
-                const verified = rootCaCert.verify(clientCert);
-                if (!verified) throw new Error("Client Certificate validation failed (Signature Invalid)");
+                if (!clientCert.verify(rootCaCert.publicKey)) {
+                     throw new Error("Client Certificate validation failed (Signature Invalid)");
+                }
 
-                const now = new Date();
-                if (now < clientCert.validity.notBefore || now > clientCert.validity.notAfter) {
+                if (!clientCert.checkValidityNow()) {
                     throw new Error("Client Certificate Expired or Not Yet Valid");
                 }
 
-                if (config.debug) console.log(`[Proxy] Client Cert Verified. Subject: ${clientCert.subject.getField('CN')?.value}`);
+                if (config.debug) console.log(`[Proxy] Client Cert Verified. Subject: ${clientCert.subject}`);
 
                 // C. Extract Public Key for Signature Verification
-                const publicKeyPem = forge.pki.publicKeyToPem(clientCert.publicKey as forge.pki.PublicKey);
-                const cryptoKey = createPublicKey(publicKeyPem);
+                const cryptoKey = clientCert.publicKey;
                 const jwk = cryptoKey.export({ format: 'jwk' });
-                Object.assign(jwk, { alg: 'PS512', use: 'sig' });
-
+                
+                // Hint usage for signature utils
+                Object.assign(jwk, { use: 'sig' });
+                
                 // D. Verify HTTP Signature
                 const requestForLib = {
                     method: req.method,
@@ -75,7 +72,6 @@ export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
                     headers: Object.fromEntries(req.headers.entries())
                 };
 
-                // Pass JWK directly
                 const verificationResult = await validateSignature(jwk as any, requestForLib);
 
                 if (!verificationResult || (typeof verificationResult === 'object' && 'valid' in verificationResult && !verificationResult.valid)) {
@@ -92,14 +88,12 @@ export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
             // 4. Proxy Request
             try {
                 let targetPath = url.pathname;
-                // Map /product/X to /api/products/X
                 if (targetPath.startsWith('/product/')) {
                     targetPath = targetPath.replace('/product/', '/api/products/');
                 }
 
                 const targetUrl = `${config.merchantUrl}${targetPath}${url.search}`;
 
-                // Forward Request
                 const proxyRes = await fetch(targetUrl, {
                     method: req.method,
                     headers: req.headers,

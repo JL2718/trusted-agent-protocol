@@ -1,22 +1,21 @@
-import forge from 'node-forge';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { AuthorityService, CAKeyPair } from './interface';
+import forge from 'node-forge';
+import type { AuthorityService } from './interface';
 
 export class CertificateAuthority implements AuthorityService {
+    
+    private caCertPem: string;
     private caKey: forge.pki.PrivateKey;
-    public caCert: forge.pki.Certificate;
+    private caCert: forge.pki.Certificate;
 
-    constructor(privateKeyPem: string, certificatePem: string) {
-        this.caKey = forge.pki.privateKeyFromPem(privateKeyPem);
-        this.caCert = forge.pki.certificateFromPem(certificatePem);
+    constructor(caKeyPem: string, caCertPem: string) {
+        this.caCertPem = caCertPem;
+        this.caKey = forge.pki.privateKeyFromPem(caKeyPem);
+        this.caCert = forge.pki.certificateFromPem(caCertPem);
     }
 
-    /**
-     * Initializes the Authority, loading or generating the Root CA.
-     * @param dataDir Directory where keys are stored.
-     */
-    static loadOrGenerate(dataDir: string): CertificateAuthority {
+    static async loadOrGenerate(dataDir: string): Promise<CertificateAuthority> {
         const caKeyPath = join(dataDir, 'ca-key.pem');
         const caCertPath = join(dataDir, 'ca-cert.pem');
 
@@ -25,94 +24,117 @@ export class CertificateAuthority implements AuthorityService {
         }
 
         if (existsSync(caKeyPath) && existsSync(caCertPath)) {
-            console.log("Loading existing Root CA...");
+            // console.log("Loading existing Root CA...");
             return new CertificateAuthority(
                 readFileSync(caKeyPath, 'utf-8'),
                 readFileSync(caCertPath, 'utf-8')
             );
         }
 
-        console.log("No Root CA found. Generating new one...");
-        const { privateKey, certificate } = CertificateAuthority.generateRootCA();
-        writeFileSync(caKeyPath, privateKey);
-        writeFileSync(caCertPath, certificate);
+        // console.log("No Root CA found. Generating new one...");
         
-        return new CertificateAuthority(privateKey, certificate);
-    }
-
-    /**
-     * Generates a self-signed Root CA Certificate
-     */
-    private static generateRootCA(commonName: string = 'TAP Root CA'): CAKeyPair {
-        console.log("Generating Root CA Key Pair (2048-bit RSA)...");
+        // 1. Generate Key
         const keys = forge.pki.rsa.generateKeyPair(2048);
 
-        console.log("Creating Root CA Certificate...");
+        // 2. Self-Sign Cert
         const cert = forge.pki.createCertificate();
         cert.publicKey = keys.publicKey;
         cert.serialNumber = '01';
         cert.validity.notBefore = new Date();
         cert.validity.notAfter = new Date();
         cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 10);
-
-        const attrs = [{ name: 'commonName', value: commonName }];
+        
+        const attrs = [{
+            name: 'commonName',
+            value: 'TAP Root CA'
+        }, {
+            name: 'countryName',
+            value: 'US'
+        }, {
+            shortName: 'ST',
+            value: 'Virginia'
+        }, {
+            name: 'localityName',
+            value: 'Blacksburg'
+        }, {
+            name: 'organizationName',
+            value: 'Test Org'
+        }, {
+            shortName: 'OU',
+            value: 'Test'
+        }];
+        
         cert.setSubject(attrs);
         cert.setIssuer(attrs);
-
+        
         cert.setExtensions([
-            { name: 'basicConstraints', cA: true, critical: true },
-            { name: 'keyUsage', keyCertSign: true, cRLSign: true, critical: true },
-            { name: 'subjectKeyIdentifier' }
+            {
+                name: 'basicConstraints',
+                cA: true,
+                critical: true
+            },
+            {
+                name: 'keyUsage',
+                keyCertSign: true,
+                cRLSign: true,
+                critical: true
+            }
         ]);
 
-        // Sign with own private key
+        // Self-sign
         cert.sign(keys.privateKey, forge.md.sha256.create());
 
-        return {
-            privateKey: forge.pki.privateKeyToPem(keys.privateKey),
-            certificate: forge.pki.certificateToPem(cert)
-        };
+        const keyPem = forge.pki.privateKeyToPem(keys.privateKey);
+        const certPem = forge.pki.certificateToPem(cert);
+
+        writeFileSync(caKeyPath, keyPem);
+        writeFileSync(caCertPath, certPem);
+        
+        return new CertificateAuthority(keyPem, certPem);
     }
 
-    /**
-     * Signs a CSR and issues a Client Certificate
-     */
-    signCSR(csrPem: string): string {
-        const csr = forge.pki.certificationRequestFromPem(csrPem);
+    getCaCert(): string {
+        return this.caCertPem;
+    }
 
+    async signCsr(csrPem: string): Promise<string> {
+        const csr = forge.pki.certificationRequestFromPem(csrPem);
+        
         if (!csr.verify()) {
-            throw new Error("CSR Signature verification failed");
+            throw new Error("Invalid CSR Signature");
         }
 
         const cert = forge.pki.createCertificate();
-        cert.publicKey = csr.publicKey as forge.pki.PublicKey;
-        // Simple serial number generation
-        cert.serialNumber = Date.now().toString();
-
+        cert.serialNumber = Date.now().toString(); // Simple serial
+        cert.publicKey = csr.publicKey;
         cert.validity.notBefore = new Date();
         cert.validity.notAfter = new Date();
         cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 1);
-
+        
         cert.setSubject(csr.subject.attributes);
         cert.setIssuer(this.caCert.subject.attributes);
-
+        
         cert.setExtensions([
-            { name: 'basicConstraints', cA: false },
-            { name: 'keyUsage', digitalSignature: true, nonRepudiation: true, keyEncipherment: true },
-            { name: 'extKeyUsage', clientAuth: true }
+            {
+                name: 'basicConstraints',
+                cA: false
+            },
+            {
+                name: 'keyUsage',
+                digitalSignature: true,
+                nonRepudiation: true,
+                keyEncipherment: true,
+                critical: true
+            },
+            {
+                name: 'extKeyUsage',
+                clientAuth: true,
+                serverAuth: true
+            }
         ]);
 
-        cert.sign(this.caKey as any, forge.md.sha256.create());
+        cert.sign(this.caKey, forge.md.sha256.create());
 
         return forge.pki.certificateToPem(cert);
-    }
-
-    // Interface Implementation
-    getCaCert(): string {
-        return forge.pki.certificateToPem(this.caCert);
-    }
-
-    signCsr(csrPem: string): string {
-        return this.signCSR(csrPem);
     }
 }

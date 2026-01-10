@@ -44,5 +44,5 @@ export interface AuthorityService {
     /**
      * Signs a CSR and returns the certificate
      */
-    signCsr(csrPem: string): string;
+    signCsr(csrPem: string): Promise<string>;
 }

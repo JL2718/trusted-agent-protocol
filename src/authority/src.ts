@@ -1,11 +1,9 @@
 import forge from 'node-forge';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { AuthorityService, CAKeyPair } from './interface';
 
-export interface CAKeyPair {
-    privateKey: string;
-    certificate: string;
-}
-
-export class CertificateAuthority {
+export class CertificateAuthority implements AuthorityService {
     private caKey: forge.pki.PrivateKey;
     public caCert: forge.pki.Certificate;
 
@@ -15,9 +13,37 @@ export class CertificateAuthority {
     }
 
     /**
+     * Initializes the Authority, loading or generating the Root CA.
+     * @param dataDir Directory where keys are stored.
+     */
+    static loadOrGenerate(dataDir: string): CertificateAuthority {
+        const caKeyPath = join(dataDir, 'ca-key.pem');
+        const caCertPath = join(dataDir, 'ca-cert.pem');
+
+        if (!existsSync(dataDir)) {
+            mkdirSync(dataDir, { recursive: true });
+        }
+
+        if (existsSync(caKeyPath) && existsSync(caCertPath)) {
+            console.log("Loading existing Root CA...");
+            return new CertificateAuthority(
+                readFileSync(caKeyPath, 'utf-8'),
+                readFileSync(caCertPath, 'utf-8')
+            );
+        }
+
+        console.log("No Root CA found. Generating new one...");
+        const { privateKey, certificate } = CertificateAuthority.generateRootCA();
+        writeFileSync(caKeyPath, privateKey);
+        writeFileSync(caCertPath, certificate);
+        
+        return new CertificateAuthority(privateKey, certificate);
+    }
+
+    /**
      * Generates a self-signed Root CA Certificate
      */
-    static generateRootCA(commonName: string = 'TAP Root CA'): CAKeyPair {
+    private static generateRootCA(commonName: string = 'TAP Root CA'): CAKeyPair {
         console.log("Generating Root CA Key Pair (2048-bit RSA)...");
         const keys = forge.pki.rsa.generateKeyPair(2048);
 
@@ -79,5 +105,14 @@ export class CertificateAuthority {
         cert.sign(this.caKey as any, forge.md.sha256.create());
 
         return forge.pki.certificateToPem(cert);
+    }
+
+    // Interface Implementation
+    getCaCert(): string {
+        return forge.pki.certificateToPem(this.caCert);
+    }
+
+    signCsr(csrPem: string): string {
+        return this.signCSR(csrPem);
     }
 }

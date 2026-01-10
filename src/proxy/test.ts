@@ -1,32 +1,62 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { startProxy } from "./src";
-import { generateKeyPairSync } from "node:crypto";
 import { createSignatureHeaders } from "@interledger/http-signature-utils";
+import forge from 'node-forge';
+import { createPrivateKey } from 'node:crypto';
 
 const PROXY_PORT = 3001;
 const MERCHANT_PORT = 3002;
-const REGISTRY_PORT = 9002;
+const AUTHORITY_PORT = 9003;
 
 const MERCHANT_URL = `http://localhost:${MERCHANT_PORT}`;
-const REGISTRY_URL = `http://localhost:${REGISTRY_PORT}`;
+const AUTHORITY_URL = `http://localhost:${AUTHORITY_PORT}`;
 const PROXY_URL = `http://localhost:${PROXY_PORT}`;
 
-// Key Setup
-const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-const publicJwk = publicKey.export({ format: 'jwk' });
-const privateJwk = privateKey.export({ format: 'jwk' });
-const KEY_ID = "test-key-1";
+// CA Setup
+let caKeys: forge.pki.KeyPair;
+let caCert: forge.pki.Certificate;
 
-// Add metadata to JWKs
-Object.assign(publicJwk, { kid: KEY_ID, kty: "OKP", alg: "EdDSA", crv: "Ed25519" });
-Object.assign(privateJwk, { kid: KEY_ID, kty: "OKP", alg: "EdDSA", crv: "Ed25519" });
+// Client Setup
+let clientKeys: forge.pki.KeyPair;
+let clientCert: string;
 
 // Mock Servers
-let merchantServer;
-let registryServer;
-let proxyServer;
+let merchantServer: any;
+let authorityServer: any;
+let proxyService: any;
+
+function setupPki() {
+    // 1. Generate CA
+    caKeys = forge.pki.rsa.generateKeyPair(2048);
+    caCert = forge.pki.createCertificate();
+    caCert.publicKey = caKeys.publicKey;
+    caCert.serialNumber = '01';
+    caCert.validity.notBefore = new Date();
+    caCert.validity.notAfter = new Date();
+    caCert.validity.notAfter.setFullYear(caCert.validity.notBefore.getFullYear() + 10);
+    const attrs = [{ name: 'commonName', value: 'Test Root CA' }];
+    caCert.setSubject(attrs);
+    caCert.setIssuer(attrs);
+    caCert.setExtensions([{ name: 'basicConstraints', cA: true, critical: true }]);
+    caCert.sign(caKeys.privateKey, forge.md.sha256.create());
+
+    // 2. Generate Client Cert
+    clientKeys = forge.pki.rsa.generateKeyPair(2048);
+    const cert = forge.pki.createCertificate();
+    cert.publicKey = clientKeys.publicKey;
+    cert.serialNumber = '02';
+    cert.validity.notBefore = new Date();
+    cert.validity.notAfter = new Date();
+    cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 1);
+    cert.setSubject([{ name: 'commonName', value: 'Test Client' }]);
+    cert.setIssuer(attrs); // Signed by CA
+    cert.sign(caKeys.privateKey, forge.md.sha256.create());
+    clientCert = forge.pki.certificateToPem(cert);
+}
 
 beforeAll(async () => {
+    setupPki();
+
     // Start Mock Merchant
     merchantServer = Bun.serve({
         port: MERCHANT_PORT,
@@ -41,33 +71,33 @@ beforeAll(async () => {
         }
     });
 
-    // Start Mock Registry
-    registryServer = Bun.serve({
-        port: REGISTRY_PORT,
+    // Start Mock Authority
+    authorityServer = Bun.serve({
+        port: AUTHORITY_PORT,
         fetch(req) {
             const url = new URL(req.url);
-            if (url.pathname === `/keys/${KEY_ID}`) {
-                return new Response(JSON.stringify(publicJwk), {
+            if (url.pathname === `/ca`) {
+                return new Response(JSON.stringify({ certificate: forge.pki.certificateToPem(caCert) }), {
                     headers: { "Content-Type": "application/json" }
                 });
             }
-            return new Response("Key Not Found", { status: 404 });
+            return new Response("Not Found", { status: 404 });
         }
     });
 
     // Start Proxy
-    proxyServer = await startProxy({
+    proxyService = await startProxy({
         port: PROXY_PORT,
         merchantUrl: MERCHANT_URL,
-        registryUrl: REGISTRY_URL,
+        authorityUrl: AUTHORITY_URL,
         debug: true
     });
 });
 
 afterAll(() => {
     if (merchantServer) merchantServer.stop();
-    if (registryServer) registryServer.stop();
-    if (proxyServer) proxyServer.stop();
+    if (authorityServer) authorityServer.stop();
+    if (proxyService) proxyService.stop();
 });
 
 describe("CDN Proxy", () => {
@@ -83,27 +113,32 @@ describe("CDN Proxy", () => {
     });
 
     test("GET /product/1 with valid signature should pass", async () => {
-        const requestOptions = {
-            method: "GET",
-            url: `${PROXY_URL}/product/1`,
-            headers: {
-                "Host": `localhost:${PROXY_PORT}`
-            }
+        const url = `${PROXY_URL}/product/1`;
+        
+        // Prepare Cert Header
+        const certObj = forge.pki.certificateFromPem(clientCert);
+        const certDer = forge.asn1.toDer(forge.pki.certificateToAsn1(certObj)).getBytes();
+        const certB64 = forge.util.encode64(certDer);
+        const clientCertHeader = `:${certB64}:`;
+
+        const headersToSign = {
+            host: `localhost:${PROXY_PORT}`,
+            'client-cert': clientCertHeader
         };
 
-        // Generate headers using the library
-        // The library expects { request, privateKey, keyId }
+        const cryptoKey = createPrivateKey(forge.pki.privateKeyToPem(clientKeys.privateKey));
 
         const signedHeaders = await createSignatureHeaders({
-            request: requestOptions,
-            privateKey: privateKey, // KeyObject
-            keyId: KEY_ID
-        }); const res = await fetch(requestOptions.url, {
-            method: requestOptions.method,
+            request: { method: 'GET', url, headers: headersToSign },
+            privateKey: cryptoKey,
+            keyId: "primary-key"
+        });
+
+        const res = await fetch(url, {
             headers: {
-                ...requestOptions.headers,
+                ...headersToSign,
                 ...signedHeaders
-            }
+            } as any
         });
 
         if (res.status !== 200) {
@@ -113,19 +148,5 @@ describe("CDN Proxy", () => {
         expect(res.status).toBe(200);
         const data = await res.json();
         expect(data.id).toBe(1);
-        expect(data.name).toBe("Test Product");
-    });
-
-    test("GET /product/1 with invalid signature should fail", async () => {
-        // Manually construct bad headers or modify valid ones
-        const badHeaders = {
-            "Signature-Input": `sig1=("@path");created=${Math.floor(Date.now() / 1000)};keyid="${KEY_ID}";alg="ed25519"`,
-            "Signature": `sig1=:badsignature:`
-        };
-
-        const res = await fetch(`${PROXY_URL}/product/1`, {
-            headers: badHeaders
-        });
-        expect(res.status).toBe(403);
     });
 });

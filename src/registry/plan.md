@@ -1,5 +1,7 @@
 # Agent Registry Service Plan
 
+> **DEPRECATION NOTICE**: This service is no longer used for Authentication/Authorization in the core TAP flow. Agents now authenticate via X.509 Certificates issued by the Authority Service. The Registry may be used in the future for Discovery or Metadata (e.g., resolving Agent ID to Name), but it is not a root of trust for HTTP Signatures.
+
 ## Goal
 Implement a Registry Service for TAP agents using Bun's native Redis client for persistence.
 The service manages Agents and their public keys (JWKs), supporting the Trusted Agent Protocol.

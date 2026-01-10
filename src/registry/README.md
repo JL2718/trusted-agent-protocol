@@ -30,7 +30,7 @@ The Registry uses the JSON Web Key (JWK) format for all key operations. This eli
 ### 1. Register Agent with Initial Key
 
 ```bash
-curl -X POST http://localhost:3000/agents \
+curl -X POST http://localhost:9002/agents \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Sample Payment Directory",
@@ -49,7 +49,7 @@ curl -X POST http://localhost:3000/agents \
 ### 2. Add Additional Keys (e.g., Ed25519)
 
 ```bash
-curl -X POST http://localhost:3000/agents/1/keys \
+curl -X POST http://localhost:9002/agents/1/keys \
   -H "Content-Type: application/json" \
   -d '{
     "jwk": {
@@ -68,7 +68,7 @@ curl -X POST http://localhost:3000/agents/1/keys \
 The proxy or verifier retrieves the key by `kid` to verify signatures.
 
 ```bash
-curl http://localhost:3000/keys/primary-rsa
+curl http://localhost:9002/keys/primary-rsa
 ```
 
 Returns the JWK directly:

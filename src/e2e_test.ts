@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { startRegistry, InMemoryRegistryService } from "./registry/module";
+import { startRegistry, MemoryRegistryService } from "./registry/module";
 import { startMerchant } from "./merchant/src";
 import { startProxy } from "./proxy/src";
 import { Agent } from "./agent/src";
@@ -20,7 +20,7 @@ let proxyServer: any;
 
 beforeAll(async () => {
     // Start Registry with In-Memory Service
-    registryServer = startRegistry(REGISTRY_PORT, new InMemoryRegistryService());
+    registryServer = startRegistry(REGISTRY_PORT, new MemoryRegistryService());
 
     // Start Merchant
     merchantServer = startMerchant({

@@ -7,7 +7,7 @@ import {
     RegistryError
 } from "./interface";
 
-export class InMemoryRegistryService implements RegistryService {
+export class MemoryRegistryService implements RegistryService {
     private agents = new Map<string, Agent>();
     private keys = new Map<string, RegistryKey>();
     private domainIndex = new Map<string, string>();

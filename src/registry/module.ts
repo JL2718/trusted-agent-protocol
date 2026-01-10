@@ -1,9 +1,10 @@
-import { RegistryServiceImpl } from "./src";
 import { RegistryError, RegistryService } from "./interface";
+import { RedisRegistryService } from "./storage/redis/module";
+import { MemoryRegistryService } from "./storage/memory/module";
+import { SqliteRegistryService } from "./storage/sqlite/module";
 
 export * from "./interface";
-export * from "./src";
-export * from "./mock";
+export { RedisRegistryService, MemoryRegistryService, SqliteRegistryService };
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -39,7 +40,6 @@ function createHandler(service: RegistryService) {
             }
 
             // GET /keys/:kid (Global Lookup)
-            // Match /keys/([^/]+)
             const keyMatch = path.match(/^\/keys\/([^\/]+)$/);
             if (method === "GET" && keyMatch) {
                 const kid = keyMatch[1];
@@ -49,7 +49,6 @@ function createHandler(service: RegistryService) {
             }
 
             // Agent Specific Routes
-            // Match /agents/([^/]+)(.*)
             const agentMatch = path.match(/^\/agents\/([^\/]+)(.*)$/);
             if (agentMatch) {
                 const agentId = agentMatch[1];
@@ -75,7 +74,6 @@ function createHandler(service: RegistryService) {
                     return new Response(null, { status: 204, headers: corsHeaders });
                 }
 
-                // Keys Sub-resource
                 // POST /agents/:id/keys
                 if (method === "POST" && subPath === "/keys") {
                     const body = await req.json();
@@ -87,7 +85,6 @@ function createHandler(service: RegistryService) {
                 const keySubMatch = subPath.match(/^\/keys\/([^\/]+)$/);
                 if (method === "GET" && keySubMatch) {
                     const kid = keySubMatch[1];
-                    // Validate it belongs to agent?
                     const key = await service.getKey(kid);
                     if (!key || key.agent_id !== agentId) {
                         return new Response("Key not found for agent", { status: 404, headers: corsHeaders });
@@ -95,7 +92,7 @@ function createHandler(service: RegistryService) {
                     return Response.json(key, { headers: corsHeaders });
                 }
 
-                // GET /agents/:id/keys (List keys)
+                // GET /agents/:id/keys
                 if (method === "GET" && subPath === "/keys") {
                     const keys = await service.getAgentKeys(agentId);
                     return Response.json(keys, { headers: corsHeaders });
@@ -120,8 +117,22 @@ function createHandler(service: RegistryService) {
     }
 }
 
+export function getRegistryService(): RegistryService {
+    const type = process.env.REGISTRY_STORAGE || 'memory';
+
+    switch (type) {
+        case 'redis':
+            return new RedisRegistryService();
+        case 'sqlite':
+            return new SqliteRegistryService(process.env.REGISTRY_DB_PATH || 'registry.db');
+        case 'memory':
+        default:
+            return new MemoryRegistryService();
+    }
+}
+
 export function startRegistry(port: number | string = 3000, serviceInstance?: RegistryService) {
-    const service = serviceInstance || new RegistryServiceImpl();
+    const service = serviceInstance || getRegistryService();
     console.log(`Registry Service listening on port ${port} (Service: ${service.constructor.name})`);
 
     return Bun.serve({

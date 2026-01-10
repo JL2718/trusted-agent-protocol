@@ -1,6 +1,6 @@
 import { describe, expect, test, mock, beforeEach } from "bun:test";
-import { RegistryServiceImpl } from "./src";
-import type { RegisterAgentRequest, JWK } from "./interface";
+import { RedisRegistryService } from "./src";
+import type { RegisterAgentRequest } from "./interface";
 
 // Mock Redis Client
 const mockRedis = {
@@ -17,12 +17,12 @@ const mockRedis = {
 };
 
 describe("RegistryService", () => {
-    let service: RegistryServiceImpl;
+    let service: RedisRegistryService;
 
     beforeEach(() => {
         // Reset mocks
         Object.values(mockRedis).forEach(m => m.mockClear());
-        service = new RegistryServiceImpl(mockRedis as any);
+        service = new RedisRegistryService(mockRedis as any);
     });
 
     test("createAgent should register agent and key", async () => {
@@ -32,6 +32,16 @@ describe("RegistryService", () => {
         mockRedis.hmset.mockResolvedValue("OK");
         mockRedis.set.mockResolvedValue("OK");
         mockRedis.sadd.mockResolvedValue(1);
+
+        // Mock getAgent return for addKey check
+        mockRedis.hgetall.mockResolvedValue({
+            id: "1",
+            name: "Test Agent",
+            domain: "https://agent.com",
+            status: "active",
+            created_at: "123",
+            updated_at: "123"
+        });
 
         const req: RegisterAgentRequest = {
             name: "Test Agent",

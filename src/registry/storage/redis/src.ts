@@ -5,11 +5,10 @@ import {
     type RegisterAgentRequest,
     type AddKeyRequest,
     type RegistryKey,
-    RegistryError,
-    type JWK
+    RegistryError
 } from "./interface";
 
-export class RegistryServiceImpl implements RegistryService {
+export class RedisRegistryService implements RegistryService {
     private db: typeof redis;
 
     constructor(client: typeof redis = redis) {
@@ -17,12 +16,6 @@ export class RegistryServiceImpl implements RegistryService {
     }
 
     async listAgents(): Promise<Agent[]> {
-        // Scan for agent keys. NOTE: simplistic implementation for demo.
-        // In production, maintain a SET of agent IDs 'registry:agents'.
-        // For now, let's assume we iterate a known range or use keys (inefficient but works for small scale)
-        // Better: Maintain 'registry:agents:index' -> Set<id>
-
-        // Let's fix the plan implicitly: Use a SET for index.
         const ids = await this.db.smembers("registry:agents:index");
         const agents: Agent[] = [];
 
@@ -37,10 +30,6 @@ export class RegistryServiceImpl implements RegistryService {
     async getAgent(id: string): Promise<Agent | null> {
         const data = await this.db.hgetall(`registry:agent:${id}`);
         if (!data) return null;
-
-        // Redis returns strings, need to parse numbers if needed,
-        // but our interface uses number for timestamps.
-        // hgetall in bun returns Record<string, string>
 
         return {
             id: data.id,
@@ -59,13 +48,11 @@ export class RegistryServiceImpl implements RegistryService {
     }
 
     async createAgent(req: RegisterAgentRequest): Promise<Agent> {
-        // 1. Validate Domain Uniqueness
         const existing = await this.getAgentByDomain(req.domain);
         if (existing) {
             throw new RegistryError("CONFLICT", `Domain ${req.domain} already registered`, 409);
         }
 
-        // 2. Generate ID
         const id = (await this.db.incr("registry:ids:agent")).toString();
         const now = Date.now();
 
@@ -78,8 +65,6 @@ export class RegistryServiceImpl implements RegistryService {
             updated_at: now
         };
 
-        // 3. Save Agent
-        // Bun Redis auto-pipelines concurrent requests
         await Promise.all([
             this.db.hmset(`registry:agent:${id}`, {
                 id: agent.id,
@@ -93,7 +78,7 @@ export class RegistryServiceImpl implements RegistryService {
             this.db.sadd("registry:agents:index", id)
         ]);
 
-        // 4. Add Initial Key        await this.addKey(id, { jwk: req.jwk });
+        await this.addKey(id, { jwk: req.jwk });
 
         return agent;
     }
@@ -116,20 +101,14 @@ export class RegistryServiceImpl implements RegistryService {
         const agent = await this.getAgent(id);
         if (!agent) return;
 
-        // Soft delete usually, but let's do soft for status
         await this.updateAgent(id, { status: 'inactive' });
-
-        // If strict delete required:
-        // await this.db.del(`registry:agent:${id}`);
-        // await this.db.del(`registry:lookup:domain:${agent.domain}`);
-        // await this.db.srem("registry:agents:index", id);
     }
 
     async addKey(agentId: string, req: AddKeyRequest): Promise<RegistryKey> {
         const agent = await this.getAgent(agentId);
         if (!agent) throw new RegistryError("NOT_FOUND", "Agent not found", 404);
 
-        const kid = req.jwk.kid || crypto.randomUUID();
+        const kid = (req.jwk.kid as string) || crypto.randomUUID();
         const now = Date.now();
 
         const registryKey: RegistryKey = {
@@ -142,8 +121,6 @@ export class RegistryServiceImpl implements RegistryService {
 
         const keyStr = JSON.stringify(registryKey);
 
-        // Save Key
-        // Check if key exists?
         const exists = await this.db.exists(`registry:key:${kid}`);
         if (exists) throw new RegistryError("CONFLICT", `Key ${kid} already exists`, 409);
 
@@ -154,6 +131,7 @@ export class RegistryServiceImpl implements RegistryService {
 
         return registryKey;
     }
+
     async getKey(kid: string): Promise<RegistryKey | null> {
         const data = await this.db.get(`registry:key:${kid}`);
         if (!data) return null;

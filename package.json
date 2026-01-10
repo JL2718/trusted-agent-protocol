@@ -4,7 +4,9 @@
     "type": "module",
     "scripts": {
         "registry": "bun run src/registry/module.ts",
-        "test:registry": "bun test ./src/registry/test.ts",
+        "test:registry:memory": "bun test ./src/registry/storage/memory/test.ts",
+        "test:registry:redis": "bun test ./src/registry/storage/redis/test.ts",
+        "test:registry:sqlite": "bun test ./src/registry/storage/sqlite/test.ts",
         "proxy": "bun run src/proxy/module.ts",
         "test:proxy": "bun test ./src/proxy/test.ts",
         "merchant": "bun run src/merchant/module.ts",

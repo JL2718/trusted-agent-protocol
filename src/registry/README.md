@@ -91,12 +91,27 @@ Returns the JWK directly:
 - **Language**: TypeScript
 - **Core Library**: [`@interledger/http-signature-utils`](https://www.npmjs.com/package/@interledger/http-signature-utils) for key import/export and verification.
 
+## Storage Backends
+
+The registry supports pluggable storage backends configured via `REGISTRY_STORAGE` environment variable:
+
+1.  **Memory** (`memory`) - Default. Ephemeral storage for testing/dev.
+2.  **Redis** (`redis`) - Native Bun Redis. Requires a running Redis instance.
+3.  **SQLite** (`sqlite`) - Native Bun SQLite. Persistent file storage.
+
+Configuration:
+-   `REGISTRY_STORAGE`: `memory` | `redis` | `sqlite`
+-   `REGISTRY_DB_PATH`: Path for SQLite DB (default `registry.db`)
+
 ### Development
 
 ```bash
 # Install dependencies
 bun install
 
-# Run the registry service
-bun run src/registry/module.ts
+# Run the registry service (Memory)
+REGISTRY_STORAGE=memory bun run src/registry/module.ts
+
+# Run with SQLite
+REGISTRY_STORAGE=sqlite bun run src/registry/module.ts
 ```

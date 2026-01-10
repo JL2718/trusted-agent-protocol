@@ -6,7 +6,9 @@
         "registry": "bun run src/registry/module.ts",
         "test:registry": "bun test ./src/registry/test.ts",
         "proxy": "bun run src/proxy/module.ts",
-        "test:proxy": "bun test ./src/proxy/test.ts"
+        "test:proxy": "bun test ./src/proxy/test.ts",
+        "merchant": "bun run src/merchant/module.ts",
+        "test:merchant": "bun test ./src/merchant/test.ts"
     },
     "private": true,
     "devDependencies": {

@@ -1,0 +1,19 @@
+{
+    "name": "trusted-agent-protocol",
+    "module": "index.ts",
+    "type": "module",
+    "scripts": {
+        "registry": "bun run src/registry/module.ts",
+        "test:registry": "bun test ./src/registry/test.ts"
+    },
+    "private": true,
+    "devDependencies": {
+        "@types/bun": "latest"
+    },
+    "peerDependencies": {
+        "typescript": "^5"
+    },
+    "dependencies": {
+        "@interledger/http-signature-utils": "^2.0.3"
+    }
+}

@@ -1,52 +1,47 @@
-# CDN Proxy Implementation Plan
+# CDN Proxy Design
 
 ## Goal
-Implement a secure CDN Proxy service that intercepts HTTP traffic, enforces RFC 9421 HTTP Message Signatures, and proxies valid requests to an upstream Merchant Service.
-
-## Requirements
-1.  **Runtime**: Bun.
-2.  **Port**: 3001 (Configurable).
-3.  **Upstream**: Merchant Service at `http://localhost:3000`.
-4.  **Key Registry**: Agent Registry at `http://localhost:9002`.
-5.  **Endpoints**:
-    *   `GET /test-proxy`: Public diagnostic endpoint (200 OK).
-    *   `/product/*`: Secure endpoint (Requires valid signature).
-    *   `/*`: Default proxy behavior (System spec implies everything not bypassed should be secured or just proxied). *Decision*: We will enforce signatures on everything except explicit bypasses (like `/test-proxy`) to act as a true "Edge Security" component, aligning with the "Rejects invalid requests" behavior described in system.md.
-6.  **Signature Verification**:
-    *   Headers: `Signature`, `Signature-Input`.
-    *   Algorithm: Ed25519, RSA-PSS-SHA256 (via `@interledger/http-signature-utils`).
-    *   Key Retrieval: Fetch JWK from Registry using `keyId`.
+Implement a secure "Edge" Proxy that intercepts HTTP traffic and enforces the Trusted Agent Protocol. It supports dual-layer authentication: mutual TLS (or Application-Layer Client Certificates) AND HTTP Message Signatures (RFC 9421).
 
 ## Architecture
--   **Entry Point**: `module.ts` (starts the server).
--   **Core Logic**: `src.ts` (handles request processing).
--   **Interfaces**: `interface.ts` (config and type definitions).
--   **Testing**: `test.ts` (end-to-end tests with mocked upstream/registry).
 
-## Workflow
-1.  **Server**: Use `Bun.serve`.
-2.  **Middleware Pipeline**:
-    *   **Logger**: Log incoming requests (method, url).
-    *   **Router**:
-        *   If `path === '/test-proxy'`, return 200 "Proxy Active".
-    *   **Verifier**:
-        *   Check for `Signature` and `Signature-Input` headers.
-        *   Parse headers using `@interledger/http-signature-utils`.
-        *   Extract `keyId`.
-        *   Fetch JWK from `${AGENT_REGISTRY_URL}/keys/${keyId}`.
-        *   Verify signature.
-        *   If invalid/missing -> Return 401/403.
-    *   **Proxy**:
-        *   Construct upstream URL (`MERCHANT_BACKEND_URL + path`).
-        *   Forward request (method, headers, body).
-        *   Return upstream response.
+*   **Runtime**: Bun
+*   **Protocol**: HTTPS (TLS)
+*   **Dependencies**: `@interledger/http-signature-utils`, `node-forge`
 
-## Dependencies
--   `@interledger/http-signature-utils`
--   `bun` (built-in `serve`, `fetch`, `test`)
+## Authentication Logic
 
-## Steps
-1.  Define interfaces in `interface.ts`.
-2.  Write tests in `test.ts` mocking Registry and Merchant.
-3.  Implement logic in `src.ts`.
-4.  Wire up entry point in `module.ts`.
+The Proxy employs a "Defense in Depth" strategy:
+
+1.  **Layer 1: Identity (Certificate)**
+    *   Checks for **mTLS** peer certificate OR `Client-Cert` header.
+    *   **Validation**: Verifies certificate chain against the **Authority Service** CA.
+    *   **Optimization**: If a valid certificate is presented, the Proxy trusts the Agent ID and extracts the Public Key directly from the certificate, bypassing the need for a Registry lookup.
+
+2.  **Layer 2: proof-of-Possession (Signature)**
+    *   Checks for RFC 9421 `Signature` and `Signature-Input` headers.
+    *   **Key Resolution**:
+        *   If Layer 1 succeeded (Valid Cert): Use Key from Cert.
+        *   If Layer 1 failed/missing: Lookup Public Key from **Registry** using `keyId`.
+    *   **Verification**: Validates the HTTP request signature using the resolved Public Key.
+
+## Proxy Logic
+
+1.  **Startup**:
+    *   Fetch and cache Root CA from **Authority Service**.
+    *   Start TLS Server.
+
+2.  **Request Handling**:
+    *   `GET /test-proxy`: Return 200 OK (Bypass).
+    *   **All Other Requests**:
+        *   Authenticate (Cert + Sig).
+        *   If valid: Rewrite path (if needed) and forward to **Merchant**.
+        *   If invalid: Return 401/403.
+
+## Configuration
+
+*   `port`: Listening port (default 3001).
+*   `authorityUrl`: URL to fetch CA cert.
+*   `registryUrl`: URL for fallback key lookup.
+*   `merchantUrl`: Upstream destination.
+*   `tls`: Server TLS configuration (Key/Cert).

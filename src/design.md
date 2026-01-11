@@ -1,156 +1,166 @@
 # System Architecture & Protocol Description
 
 ## System Overview
-The Trusted Agent Protocol (TAP) system consists of four main components designed to facilitate secure, authenticated interactions between AI Agents and Merchant systems using RFC 9421 HTTP Message Signatures. The architecture enforces identity verification at the edge (CDN Proxy) before traffic reaches the Merchant application.
+The Trusted Agent Protocol (TAP) system consists of five main components designed to facilitate secure, authenticated interactions between AI Agents and Merchant systems using RFC 9421 HTTP Message Signatures and mTLS/Certificate-based identity. The architecture enforces identity verification at the edge (CDN Proxy) before traffic reaches the Merchant application.
 
 **Tech Stack:**
 - **Runtime:** Bun
 - **Language:** TypeScript
 - **UI:** VanJS (No .html files)
 - **Signatures:** Standard HTTP Signatures via `@interledger/http-signature-utils` with JWK.
+- **PKI:** node-forge for Certificate Authority and CSR operations.
 
 ## Components
 
 ### 1. TAP Agent (Client)
 - **Role**: The end-user acting as an autonomous agent.
-- **Technology**: Bun, TypeScript.
 - **Functionality**:
-  - Uses cryptographic keys (Ed25519, RSA-PSS) stored as JWKs.
-  - Generates RFC 9421 `Signature` and `Signature-Input` headers using `@interledger/http-signature-utils`.
-  - Interact with the Merchant via signed HTTP requests.
+  - Generates cryptographic keys (Ed25519, RSA-PSS) stored as JWKs.
+  - Registers identity with the **Agent registry**.
+  - Requests a Client Certificate from the **Authority Service**.
+  - Authenticates via **HTTP Signatures** (RFC 9421) AND **Client Certificates** (RFC 9440 header or mTLS).
 
 ### 2. CDN Proxy (Edge Security)
-- **Port**: `3001`
-- **Technology**: Bun, TypeScript.
 - **Role**: Gatekeeper / Reverse Proxy.
 - **Logic**:
   - Intercepts **all** incoming traffic.
-  - Parses RFC 9421 headers.
-  - Queries **Agent Registry** to fetch the public key (JWK) associated with the `keyId`.
-  - Verifies digital signatures using `@interledger/http-signature-utils`.
-  - Checks for replay attacks (Nonce cache) and expiration.
-  - Forwards valid requests to **Merchant Frontend** or **Merchant Backend**.
-  - Rejects invalid requests (403 Forbidden).
+  - **Authentication**:
+    - Checks `Client-Cert` header or mTLS peer certificate.
+    - Validates certificate against **Authority CA**.
+    - If valid cert: Extracts Public Key from cert (Optimization: skips Registry lookup).
+    - If no cert: Queries **Agent Registry** for Public Key.
+  - **Verification**:
+    - Verifies RFC 9421 `Signature` using the resolved Public Key.
+  - Forwards valid requests to **Merchant Service**.
 
 ### 3. Agent Registry (Identity Provider)
-- **Port**: `9002`
-- **Technology**: Bun, TypeScript.
 - **Role**: Storage for Agent Identities and Public Keys.
 - **Logic**:
-  - Exposes API for Agent registration.
-  - Provides public API for the CDN Proxy to retrieve keys (JWKs) for verification.
+  - Exposes API for Agent and Key registration.
+  - Supports multiple storage backends (Memory, Redis, SQLite).
+  - Provides fallback public key lookup for the Proxy.
 
-### 4. Merchant Service (Application)
-- **Port**: `3000`
-- **Technology**: Bun, TypeScript.
+### 4. Authority Service (CA)
+- **Role**: Certificate Authority.
+- **Logic**:
+  - Issues self-signed CA certificates.
+  - Signs Certificate Signing Requests (CSRs) from Agents.
+  - Provides CA certificate verification to Proxy.
+
+### 5. Merchant Service (Application)
 - **Role**: Unified Resource Server & UI Host.
 - **Logic**:
   - Serves static frontend assets (VanJS).
-  - Provides a read-only list of products via API (`/api/products`).
-  - No database (In-memory static data).
-  - Receives traffic via the CDN Proxy.
+  - Provides a read-only list of products via API.
+  - Protected behind the Proxy.
 
 ---
 
-## API Reference
+## Protocol Flows
 
-### Agent Registry (Port 9002)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/` | Health check |
-| `POST` | `/agents/register` | Register or update an agent |
-| `GET` | `/agents/{agent_id}` | Get agent details |
-| `GET` | `/agents` | List all agents |
-| `DELETE` | `/agents/{agent_id}` | Deactivate an agent |
-| `GET` | `/keys/{key_id}` | **Critical**: Direct public key lookup by ID (Used by Proxy) |
-| `POST` | `/agents/{agent_id}/keys` | Add a key to an agent |
-| `GET` | `/agents/{agent_id}/keys/{key_id}` | Get specific key details |
+### 1. Registration & Provisioning
+1.  **Agent** generates Key Pair (JWK).
+2.  **Agent** registers with **Registry** (POST `/agents`).
+3.  **Agent** generates CSR and requests certificate from **Authority** (POST `/authority/sign`).
+4.  **Authority** signs CSR and returns Client Certificate.
 
-### CDN Proxy (Port 3001)
-*Acts as a middleware.*
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/test-proxy` | Diagnostic endpoint (Bypasses signature check) |
-| `REQ` | `/product/*` | **Secured**: Enforces Signature Verification |
-| `*` | `/*` | Proxies ALL traffic to Merchant Service (3000) |
-
-### Merchant Service (Port 3000)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/` | Serves Static UI (index.html/js) |
-| `GET` | `/api/products` | List all products (Static) |
-| `GET` | `/api/products/{id}` | Get product details (Static) |
-
----
-
-### Protocol Flows
-
-#### 1. Authenticated Browse (Active Flow)
-*The primary flow verifying the Trusted Agent Protocol.*
-
-1.  **Agent (Bun/TS)**:
-    -   Loads Keys from JWK.
-    -   Generates headers:
-        -   `Signature-Input`: `sig1=("@method" "@target-uri" "content-digest" "content-length" "content-type" "authorization");created=1618884473;keyid="test-key-rsa-pss"`
-        -   `Signature`: `sig1=:...:`
-    -   Navigates to `http://localhost:3001/product/1`.
-
-2.  **CDN Proxy (Edge)**:
-    -   Intercepts request to `/product/1`.
-    -   Extracts `keyId`.
-    -   Fetches Public Key (JWK) from **Agent Registry** (`GET /keys/{keyId}`).
-    -   Verifies Signature & Nonce using `@interledger/http-signature-utils`.
-    -   *If Valid*: Forwards request to **Merchant Service** (`localhost:3000`).
-    -   **Merchant Service** serves the UI or API response.
+### 2. Authenticated Request (Active Flow)
+1.  **Agent** constructs request to **Proxy** (`GET /product/1`).
+2.  **Agent** adds headers:
+    -   `Signature-Input`, `Signature` (RFC 9421)
+    -   `Client-Cert` (RFC 9440) containing the received certificate.
+3.  **Proxy** receives request:
+    -   Verifies `Client-Cert` against **Authority CA**.
+    -   Extracts Public Key from `Client-Cert`.
+    -   Verifies `Signature` using extracted key.
+4.  **Proxy** forwards to **Merchant**.
 
 ## System Diagrams
 
-### Active Runtime Flow
-
-```mermaid
-sequenceDiagram
-    participant A as TAP Agent (Bun/TS)
-    participant C as CDN Proxy (3001)
-    participant R as Agent Registry (9002)
-    participant M as Merchant Service (3000)
-    
-    Note over A, R: Prerequisite: Keys provisioned via JWK
-    
-    rect rgba(0, 0, 0, 0)
-    Note right of A: Authenticated View
-    A->>A: Sign Request (@authority, @path)
-    A->>C: GET /product/1 (Headers: Signature)
-    C->>R: GET /keys/{keyId}
-    R-->>C: 200 OK (Public Key JWK)
-    C->>C: Verify Signature
-    C->>M: Forward Request
-    M-->>C: UI/Data
-    C-->>A: Response
-    end
-```
-
-## Internal Architecture
+### Architecture
 
 ```mermaid
 graph TD
-    subgraph "Client Side"
-        Agent["TAP Agent (Bun/TS)"]
-        Agent -->|Generates Sig| Agent
+    subgraph "Client"
+        Agent["TAP Agent"]
     end
 
-    subgraph "Infrastructure Layer"
-        Proxy["CDN Proxy (Bun/TS) :3001"]
-        Registry["Agent Registry (Bun/TS) :9002"]
-        DB_Reg[(Registry DB)]
-        
-        Proxy -->|1. Fetch Key| Registry
-        Registry --> DB_Reg
+    subgraph "Infrastructure"
+        Authority["Authority Service (CA)"]
+        Registry["Agent Registry"]
+        Proxy["CDN Proxy"]
     end
 
-    subgraph "Merchant System"
-        Merchant["Merchant Service (Bun/TS) :3000\n(API + Static UI)"]
+    subgraph MerchantSystem ["Merchant System"]
+        Merchant["Merchant Service"]
     end
 
-    Agent -->|2. Signed Request| Proxy
-    Proxy -->|3. Proxy Traffic| Merchant
+    Agent -->|1. Register| Registry
+    Agent -->|2. Get Cert| Authority
+    Agent -->|3. Signed Req + Cert| Proxy
+    
+    Proxy -.->|Fetch CA Cert| Authority
+    Proxy -.->|Fallback Key Lookup| Registry
+    
+    Proxy -->|4. Validated Req| Merchant
 ```
+
+## Test Scenarios
+
+### 1. Pure mTLS (No Signature)
+*Based on `src/proxy/test/mtls.test.ts`*
+This flow demonstrates the efficiency optimization where a valid, trusted mTLS certificate allows the Agent to bypass the application-layer signature check.
+
+```mermaid
+sequenceDiagram
+    participant A as Agent
+    participant P as CDN Proxy
+    participant M as Merchant
+
+    Note over A, P: TLS Handshake (Client Cert Sent)
+    A->>P: GET /product/1
+    P->>P: Verify Peer Certificate (CA)
+    P->>P: Check: AuthorizedByCert = true
+    Note right of P: Signature headers missing.<br/>Signature check skipped.
+    P->>M: Forward Request
+    M-->>P: 200 OK
+    P-->>A: 200 OK
+```
+
+### 2. Dual Auth (Cert Header + Signature)
+*The standard "Defense in Depth" flow.*
+The Agent provides the certificate as an HTTP Header (RFC 9440 style) and includes a signature. The Proxy uses the public key from the header certificate (after verifying it) to validate the signature, avoiding a Registry lookup.
+
+```mermaid
+sequenceDiagram
+    participant A as Agent
+    participant P as CDN Proxy
+    participant R as Registry
+    participant M as Merchant
+
+    A->>A: Sign Request
+    A->>P: GET / (Header: Client-Cert + Signature)
+    P->>P: Verify Client-Cert (CA)
+    P->>P: Extract Public Key from Cert
+    P->>P: Verify Signature (using Extracted Key)
+    Note right of P: No Registry Lookup needed
+    P->>M: Forward Request
+    M-->>P: Response
+    P-->>A: Response
+```
+
+### 3. Unauthorized Access
+*Based on `src/proxy/test/unauthorized.test.ts`*
+Requests missing both valid mTLS credentials and valid signatures are rejected.
+
+```mermaid
+sequenceDiagram
+    participant U as Unknown Client
+    participant P as CDN Proxy
+
+    U->>P: GET /api/products (No Auth)
+    P->>P: Peer Cert? No.
+    P->>P: Signature? No.
+    P-->>U: 403 Forbidden
+```
+

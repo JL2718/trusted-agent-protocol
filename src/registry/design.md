@@ -1,60 +1,51 @@
-# Agent Registry Service Plan
+# Agent Registry Service Design
 
 ## Goal
-Implement a Registry Service for TAP agents using Bun's native Redis client for persistence.
-The service manages Agents and their public keys (JWKs), supporting the Trusted Agent Protocol.
+Implement a Registry Service for TAP agents that manages Agents and their public keys (JWKs). It acts as the source of truth for agent identities and provides key lookup for the Proxy (fallback mechanism).
 
 ## Architecture
 
 *   **Runtime**: Bun
-*   **Database**: Redis (via `import { redis } from "bun"`)
-*   **Key Format**: JWK (JSON Web Key)
-*   **API**: HTTP (Bun.serve)
+*   **Storage**: Pluggable Strategy Pattern
+    *   **Memory**: For testing/local dev (Default).
+    *   **Redis**: For production/shared state.
+    *   **SQLite**: File-based persistence.
+*   **API**: HTTP (Bun.serve) with CORS support.
 
-## Data Model (Redis)
+## Data Model
 
-We will use the following Redis key patterns:
-
-1.  **Global Counters**
-    *   `registry:ids:agent` -> Incrementing Integer (Next Agent ID)
-
-2.  **Agents**
-    *   `registry:agent:{id}` -> Hash
-        *   `id`: string
-        *   `name`: string
-        *   `domain`: string (Unique)
-        *   `status`: "active" | "inactive"
-        *   `created_at`: timestamp
-        *   `updated_at`: timestamp
-    *   `registry:lookup:domain:{domain}` -> String (Stores `agent_id`)
-
-3.  **Keys**
-    *   `registry:key:{kid}` -> String (JSON serialized JWK + metadata)
-        *   *Note*: Storing as JSON string allows easy retrieval of the full JWK object.
-        *   Includes `agent_id` in the stored object for reverse lookup if needed.
-    *   `registry:agent:{id}:keys` -> Set (Stores `kid`s)
+### Entities
+*   **Agent**:
+    *   `id`: UUID
+    *   `name`: string
+    *   `domain`: string (Unique)
+    *   `status`: "active" | "inactive" | "revoked"
+    *   `created_at`: timestamp
+    *   `updated_at`: timestamp
+*   **Key**:
+    *   `kid`: string (Key ID)
+    *   `agent_id`: string (FK)
+    *   `publicKey`: JWK Object
+    *   `status`: "active" | "revoked"
 
 ## Module Structure
 
-*   `interface.ts`: Types for `Agent`, `RegistryKey`, `ServiceError`.
-*   `src.ts`: Implementation of CRUD logic using `bun.redis`.
-*   `module.ts`: HTTP Server setup (`Bun.serve`) mapping routes to `src.ts`.
-*   `test.ts`: Integration tests (Mocked Redis or Real if available).
+*   `interface.ts`: Defines `IRegistryService` interface and data types (`Agent`, `RegistryKey`).
+*   `module.ts`: HTTP Server implementation mapping routes to service methods.
+*   `storage/`: Directory containing storage implementations.
+    *   `memory/`: In-memory Map implementation.
+    *   `redis/`: Redis-backed implementation.
+    *   `sqlite/`: SQLite-backed implementation.
 
 ## API Endpoints
 
-*   `GET /agents`: List all agents (scan `registry:agent:*`)
-*   `POST /agents`: Create Agent + Initial Key
-*   `GET /agents/:id`: Get Agent details
-*   `PUT /agents/:id`: Update Agent
-*   `DELETE /agents/:id`: Deactivate Agent
-*   `POST /agents/:id/keys`: Add Key
-*   `GET /agents/:id/keys/:kid`: Get Key
-*   `GET /keys/:kid`: Global Key Lookup
-
-## Implementation Steps
-
-1.  **Define Interfaces**: `interface.ts`
-2.  **Implement Logic**: `src.ts` (Redis interactions)
-3.  **Setup Server**: `module.ts`
-4.  **Testing**: `test.ts`
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/agents` | List all agents |
+| `POST` | `/agents` | Create Agent (requires JWK) |
+| `GET` | `/agents/:id` | Get Agent details |
+| `PUT` | `/agents/:id` | Update Agent |
+| `DELETE` | `/agents/:id` | Deactivate/Delete Agent |
+| `POST` | `/agents/:id/keys` | Add new Key to Agent |
+| `GET` | `/agents/:id/keys` | List Agent Keys |
+| `GET` | `/keys/:kid` | **Global Key Lookup** (Used by Proxy) |

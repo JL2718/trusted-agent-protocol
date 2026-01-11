@@ -1,36 +1,37 @@
-# TAP Agent Implementation Plan
+# TAP Agent Design
 
 ## Goal
-Implement a TAP Agent client that authenticates via RFC 9421 signatures and interacts with the Merchant via the CDN Proxy.
-
-## Requirements
-1.  **Runtime**: Bun.
-2.  **Identity**: Manage Ed25519/RSA keys (JWK).
-3.  **Registration**: Ability to register identity with the Agent Registry.
-4.  **Interaction**: Sign HTTP requests targeting the CDN Proxy (`http://localhost:3001`).
-5.  **Signature Spec**: Use `@interledger/http-signature-utils` to generate `Signature` and `Signature-Input` headers.
+Implement a reference Client capable of acting as an autonomous agent in the TAP ecosystem. The Agent manages its own identity, cryptographic keys, and executes secure protocol flows.
 
 ## Architecture
--   **Entry Point**: `module.ts` (CLI demo).
--   **Core Logic**: `src.ts` (`Agent` class).
--   **Interfaces**: `interface.ts`.
--   **Testing**: `test.ts`.
 
-## Workflow (Demo)
-1.  **Initialize**: Generate a new Ed25519 Key Pair (JWK).
-2.  **Register**: Send public key to Agent Registry (`POST :9002/agents`).
-3.  **Interact**:
-    *   Construct request to Proxy (`GET :3001/product/1`).
-    *   Sign request (add headers).
-    *   Send request.
-    *   Display response.
+*   **Runtime**: Bun
+*   **Core Class**: `Agent` (implements `IAgent`)
+*   **Storage**: In-memory (Keys/Certificates)
 
-## Dependencies
--   `@interledger/http-signature-utils`
--   `bun` (native `fetch`, `crypto`)
+## Core Capabilities
 
-## Steps
-1.  Define `interface.ts`.
-2.  Implement `src.ts` with key generation, registration, and signing logic.
-3.  Write `test.ts` to verify header generation.
-4.  Create `module.ts` to run the end-to-end scenario.
+1.  **Identity Management**:
+    *   **Key Generation**: Supports Ed25519 and RSA-2048 key pairs.
+    *   **Registration**: Registers identity (DID/URL) and Public Keys with the **Registry**.
+
+2.  **Certificate Provisioning**:
+    *   Generates a Certificate Signing Request (CSR) locally.
+    *   Submits CSR to the **Authority**.
+    *   Stores the returned Client Certificate.
+
+3.  **Authenticated Interactions**:
+    *   Wraps `fetch` to automatically apply authentication headers.
+    *   **Modes**:
+        *   `signature`: Adds RFC 9421 `Signature` headers.
+        *   `Client-Cert`: Adds RFC 9440 `Client-Cert` header (containing the provisioned certificate).
+
+## Workflow
+
+1.  `agent.generateKey('my-key')`
+2.  `agent.register()` -> Registry
+3.  `agent.requestCertificate()` -> Authority
+4.  `agent.fetch('/path')`:
+    *   Sign Request (using Private Key).
+    *   Attach Cert (if available).
+    *   Send to Proxy.

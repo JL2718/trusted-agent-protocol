@@ -57,7 +57,7 @@ afterAll(() => {
 describe("TAP End-to-End Auth Combinations", () => {
     test("1. mTLS + Authority-signed cert (Offline)", async () => {
         const agent = new Agent({
-            name: "Authority mTLS Agent",
+            name: "E2E_MTLS_AGENT",
             registryUrl: REGISTRY_URL,
             proxyUrl: PROXY_URL,
             authMode: 'mTLS'

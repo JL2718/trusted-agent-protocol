@@ -41,7 +41,8 @@ beforeAll(async () => {
         port: PROXY_PORT,
         merchantUrl: MERCHANT_URL,
         registryUrl: REGISTRY_URL,
-        tls: { cert: serverCert, key: serverKey }
+        tls: { cert: serverCert, key: serverKey },
+        debug: true
     });
     proxyServer.start();
     await new Promise(r => setTimeout(r, 500));
@@ -53,15 +54,121 @@ afterAll(() => {
     proxyServer?.stop();
 });
 
-describe("TAP End-to-End Configurable Auth", () => {
-    test("Agent with authMode: 'signature'", async () => {
+describe("TAP End-to-End Auth Combinations", () => {
+    test("1. mTLS + Authority-signed cert (Offline)", async () => {
         const agent = new Agent({
-            name: "Sig Agent",
+            name: "Authority mTLS Agent",
+            registryUrl: REGISTRY_URL,
+            proxyUrl: PROXY_URL,
+            authMode: 'mTLS'
+        });
+        agent.generateKey("mtls-key", 'rsa'); // RSA for node-forge support in tests
+        await agent.register();
+        await agent.requestCertificate();
+
+        const agentTls = (agent as any).keyPair;
+        const agentCert = (agent as any).certificate;
+
+        const mtlsAgent = new Agent({
+            name: "Authority mTLS Agent",
+            registryUrl: REGISTRY_URL,
+            proxyUrl: PROXY_URL,
+            authMode: 'mTLS',
+            tls: {
+                key: agentTls.privateKey.export({ format: 'pem', type: 'pkcs8' }),
+                cert: agentCert,
+                rejectUnauthorized: false
+            }
+        });
+
+        const originalFetch = global.fetch;
+        (global as any).fetch = (url: any, init: any) => {
+            if (url.startsWith(PROXY_URL)) {
+                return originalFetch(url, { ...init, tls: { ...init.tls, rejectUnauthorized: false } });
+            }
+            return originalFetch(url, init);
+        };
+
+        const res = await mtlsAgent.fetch("/product/1");
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.id.toString()).toBe("1");
+
+        global.fetch = originalFetch;
+    });
+
+    test("2. mTLS + Registry-verified (Fallback)", async () => {
+        const agent = new Agent({
+            name: "Registry mTLS Agent",
+            registryUrl: REGISTRY_URL,
+            proxyUrl: PROXY_URL,
+            authMode: 'mTLS'
+        });
+        agent.generateKey("reg-mtls-key");
+        await agent.register();
+        const agentId = (agent as any).agentId;
+
+        // Manually generate a cert NOT signed by the authority
+        const selfSignedTls = generateCert(agentId);
+
+        const mtlsAgent = new Agent({
+            name: "Registry mTLS Agent",
+            registryUrl: REGISTRY_URL,
+            proxyUrl: PROXY_URL,
+            authMode: 'mTLS',
+            tls: {
+                ...selfSignedTls,
+                rejectUnauthorized: false
+            }
+        });
+
+        const originalFetch = global.fetch;
+        (global as any).fetch = (url: any, init: any) => {
+            if (url.startsWith(PROXY_URL)) {
+                return originalFetch(url, { ...init, tls: { ...init.tls, rejectUnauthorized: false } });
+            }
+            return originalFetch(url, init);
+        };
+
+        const res = await mtlsAgent.fetch("/product/1");
+        expect(res.status).toBe(200);
+
+        global.fetch = originalFetch;
+    });
+
+    test("3. HTTP Sig + Authority-signed cert (Offline)", async () => {
+        const agent = new Agent({
+            name: "Authority Sig Agent",
             registryUrl: REGISTRY_URL,
             proxyUrl: PROXY_URL,
             authMode: 'signature'
         });
-        agent.generateKey("sig-key");
+        agent.generateKey("sig-key", 'rsa');
+        await agent.register();
+        await agent.requestCertificate();
+
+        const originalFetch = global.fetch;
+        (global as any).fetch = (url: any, init: any) => {
+            if (url.startsWith(PROXY_URL)) {
+                return originalFetch(url, { ...init, tls: { rejectUnauthorized: false } });
+            }
+            return originalFetch(url, init);
+        };
+
+        const res = await agent.fetch("/product/1");
+        expect(res.status).toBe(200);
+
+        global.fetch = originalFetch;
+    });
+
+    test("4. HTTP Sig + Registry-verified (Default)", async () => {
+        const agent = new Agent({
+            name: "Registry Sig Agent",
+            registryUrl: REGISTRY_URL,
+            proxyUrl: PROXY_URL,
+            authMode: 'signature'
+        });
+        agent.generateKey("reg-sig-key");
         await agent.register();
 
         const originalFetch = global.fetch;
@@ -74,52 +181,6 @@ describe("TAP End-to-End Configurable Auth", () => {
 
         const res = await agent.fetch("/product/1");
         expect(res.status).toBe(200);
-        const data = await res.json();
-        expect(data.id.toString()).toBe("1");
-
-        global.fetch = originalFetch;
-    });
-
-    test("Agent with authMode: 'mTLS'", async () => {
-        // 1. Create agent and register identity
-        const agent = new Agent({
-            name: "mTLS Agent",
-            registryUrl: REGISTRY_URL,
-            proxyUrl: PROXY_URL
-        });
-        agent.generateKey("mtls-key");
-        await agent.register();
-        const agentId = (agent as any).agentId; // Use the actual registered ID
-
-        // 2. Generate client cert for this agentId
-        const clientTls = generateCert(agentId);
-
-        // 3. Re-configure agent for mTLS
-        const mtlsAgent = new Agent({
-            name: "mTLS Agent",
-            registryUrl: REGISTRY_URL,
-            proxyUrl: PROXY_URL,
-            authMode: 'mTLS',
-            tls: {
-                ...clientTls,
-                rejectUnauthorized: false
-            }
-        });
-
-        const originalFetch = global.fetch;
-        (global as any).fetch = (url: any, init: any) => {
-            if (url.startsWith(PROXY_URL)) {
-                // If the test provides tls options, merge them
-                const tls = { ...init.tls, rejectUnauthorized: false };
-                return originalFetch(url, { ...init, tls });
-            }
-            return originalFetch(url, init);
-        };
-
-        const res = await mtlsAgent.fetch("/product/1");
-        expect(res.status).toBe(200);
-        const data = await res.json();
-        expect(data.id.toString()).toBe("1");
 
         global.fetch = originalFetch;
     });

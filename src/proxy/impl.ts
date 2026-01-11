@@ -1,21 +1,44 @@
 import tls from 'node:tls';
+import crypto from 'node:crypto';
 import { validateSignature } from '@interledger/http-signature-utils';
 import type { ProxyConfig, ProxyService } from './interface';
+import forge from 'node-forge';
 
 export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
-    const tlsOptions = config.tls ? {
-        key: config.tls.key,
-        cert: config.tls.cert,
-        ca: config.tls.ca,
-        requestCert: true,
-        rejectUnauthorized: false,
-    } : null;
-
-    if (!tlsOptions) {
+    if (!config.tls) {
         throw new Error("Proxy mTLS configuration missing. TLS options required.");
     }
 
-    const server = tls.createServer(tlsOptions, (socket) => {
+    const tlsConf = config.tls;
+    const tlsOptions = {
+        key: tlsConf.key,
+        cert: tlsConf.cert,
+        ca: tlsConf.ca,
+        requestCert: true,
+        rejectUnauthorized: false,
+    };
+
+    let registryCACert: forge.pki.Certificate | null = null;
+    let fallbackCA: string | undefined = tlsConf.ca;
+
+    // Helper to fetch Registry CA
+    async function refreshRegistryCA() {
+        try {
+            const res = await fetch(`${config.registryUrl}/authority/cert`);
+            if (res.ok) {
+                const pem = await res.text();
+                registryCACert = forge.pki.certificateFromPem(pem);
+                if (config.debug) console.log("[Proxy] Registry CA Certificate loaded.");
+            }
+        } catch (e: any) {
+            if (config.debug) console.warn(`[Proxy] Could not fetch Registry CA: ${e.message}`);
+        }
+    }
+
+    // Initial fetch
+    await refreshRegistryCA();
+
+    const server = tls.createServer(tlsOptions, (socket: tls.TLSSocket) => {
         let buffer = Buffer.alloc(0);
         let headersParsed = false;
         let method = '';
@@ -23,10 +46,10 @@ export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
         let headers: Record<string, string> = {};
         let bodyOffset = 0;
 
-        socket.on('data', async (chunk) => {
+        socket.on('data', async (chunk: Buffer) => {
             if (headersParsed) return; // Wait for initial request parsing
 
-            buffer = Buffer.concat([buffer, chunk]);
+            buffer = Buffer.concat([buffer, chunk as Buffer]);
             const str = buffer.toString();
             const headerEnd = str.indexOf('\r\n\r\n');
 
@@ -59,7 +82,7 @@ export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
             }
         });
 
-        socket.on('error', (err) => {
+        socket.on('error', (err: Error) => {
             if (config.debug) console.error("[Proxy] Socket Error:", err.message);
         });
     });
@@ -75,20 +98,42 @@ export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
         }
 
         let authorizedByCert = false;
+        let agentPublicKeyJwk: any = null;
 
         // 2. mTLS Authorization
         try {
-            const cert = socket.getPeerCertificate();
-            if (cert && cert.subject && cert.subject.CN) {
-                const agentId = cert.subject.CN;
-                if (config.debug) console.log(`[Proxy] mTLS Agent ID: ${agentId}`);
+            const peerCert = socket.getPeerCertificate();
+            if (peerCert && peerCert.raw) {
+                const certPem = `-----BEGIN CERTIFICATE-----\n${peerCert.raw.toString('base64')}\n-----END CERTIFICATE-----`;
+                const forgeCert = forge.pki.certificateFromPem(certPem);
+                const agentId = forgeCert.subject.getField('CN')?.value as string;
 
-                const agentRes = await fetch(`${config.registryUrl}/agents/${agentId}`);
-                if (agentRes && agentRes.ok) {
-                    const agent: any = await agentRes.json();
-                    if (agent.status === 'active') {
-                        authorizedByCert = true;
-                        if (config.debug) console.log(`[Proxy] Authorized via mTLS: ${agentId}`);
+                if (agentId) {
+                    if (config.debug) console.log(`[Proxy] mTLS Agent ID: ${agentId}`);
+
+                    // Verify against Registry CA
+                    if (registryCACert) {
+                        try {
+                            const verified = registryCACert.verify(forgeCert);
+                            if (verified) {
+                                authorizedByCert = true;
+                                if (config.debug) console.log(`[Proxy] Authorized via CA-signed mTLS: ${agentId}`);
+                            }
+                        } catch (e) {
+                            if (config.debug) console.log(`[Proxy] mTLS CA Verification failed: ${agentId}`);
+                        }
+                    }
+
+                    // Fallback to Registry Lookup if not authorized by CA
+                    if (!authorizedByCert) {
+                        const agentRes = await fetch(`${config.registryUrl}/agents/${agentId}`);
+                        if (agentRes && agentRes.ok) {
+                            const agent: any = await agentRes.json();
+                            if (agent.status === 'active') {
+                                authorizedByCert = true;
+                                if (config.debug) console.log(`[Proxy] Authorized via Registry lookup: ${agentId}`);
+                            }
+                        }
                     }
                 }
             }
@@ -96,45 +141,70 @@ export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
             if (config.debug) console.error(`[Proxy] mTLS Auth Error: ${e.message}`);
         }
 
-        // 3. Signature Verification (Fallback)
-        if (!authorizedByCert) {
+        // 3. Signature Verification (Fallback or Supplement)
+        if (!authorizedByCert || headers['signature']) {
             try {
                 const signatureInput = headers['signature-input'];
                 if (!signatureInput) {
-                    throw new Error("Missing Signature Headers and no valid mTLS");
-                }
+                    if (!authorizedByCert) throw new Error("Missing Signature Headers and no valid mTLS");
+                } else {
+                    const keyIdMatch = signatureInput.match(/keyid="([^"]+)"/);
+                    if (!keyIdMatch) throw new Error("KeyID not found in Signature-Input");
+                    const keyId = keyIdMatch[1];
 
-                const keyIdMatch = signatureInput.match(/keyid="([^"]+)"/);
-                if (!keyIdMatch) throw new Error("KeyID not found in Signature-Input");
-                const keyId = keyIdMatch[1];
-
-                const keyRes = await fetch(`${config.registryUrl}/keys/${keyId}`);
-                if (!keyRes.ok) throw new Error(`Public Key ${keyId} not found`);
-                const jwk = await keyRes.json() as any;
-
-                const protocol = 'https';
-                const host = headers['host'] || `localhost:${config.port}`;
-                const url = new URL(path, `${protocol}://${host}`);
-
-                const requestForLib = {
-                    method: method,
-                    url: url.toString(),
-                    headers: headers
-                };
-
-                const result = await validateSignature(jwk, requestForLib);
-                if (result === false) {
-                    throw new Error("Signature Validation False");
-                }
-                if (result && typeof result === 'object' && 'valid' in (result as any)) {
-                    const vRes = result as { valid: boolean; reason?: string };
-                    if (!vRes.valid) {
-                        throw new Error("Signature Invalid: " + (vRes.reason || "Unknown"));
+                    // Check for CA-signed Client-Cert header
+                    const clientCertHeader = headers['client-cert'];
+                    if (clientCertHeader && registryCACert) {
+                        try {
+                            const certPem = `-----BEGIN CERTIFICATE-----\n${clientCertHeader}\n-----END CERTIFICATE-----`;
+                            const forgeCert = forge.pki.certificateFromPem(certPem);
+                            if (registryCACert.verify(forgeCert)) {
+                                if (config.debug) console.log(`[Proxy] Using public key from CA-signed Client-Cert`);
+                                // Export forge public key to JWK
+                                // This is tricky with forge, but we can use node:crypto for this part
+                                const pem = forge.pki.publicKeyToPem(forgeCert.publicKey);
+                                const cryptoKey = crypto.createPublicKey(pem);
+                                agentPublicKeyJwk = cryptoKey.export({ format: 'jwk' });
+                                agentPublicKeyJwk.kid = keyId;
+                                agentPublicKeyJwk.alg = 'RS256';
+                                agentPublicKeyJwk.use = 'sig';
+                            }
+                        } catch (e) {
+                            if (config.debug) console.warn(`[Proxy] Client-Cert verification failed: ${(e as any).message}`);
+                        }
                     }
+
+                    if (!agentPublicKeyJwk) {
+                        const keyRes = await fetch(`${config.registryUrl}/keys/${keyId}`);
+                        if (!keyRes.ok) throw new Error(`Public Key ${keyId} not found`);
+                        agentPublicKeyJwk = await keyRes.json() as any;
+                    }
+
+                    const protocol = 'https';
+                    const host = headers['host'] || `localhost:${config.port}`;
+                    const url = new URL(path, `${protocol}://${host}`);
+
+                    const requestForLib = {
+                        method: method,
+                        url: url.toString(),
+                        headers: headers
+                    };
+
+                    const result = await validateSignature(agentPublicKeyJwk, requestForLib);
+                    if (result === false) {
+                        throw new Error("Signature Validation False");
+                    }
+                    if (result && typeof result === 'object' && 'valid' in (result as any)) {
+                        const vRes = result as { valid: boolean; reason?: string };
+                        if (!vRes.valid) {
+                            throw new Error("Signature Invalid: " + (vRes.reason || "Unknown"));
+                        }
+                    }
+                    authorizedByCert = true; // Mark as authorized if signature passed
                 }
             } catch (e: any) {
                 if (config.debug) console.error(`[Proxy] Denied: ${e.message}`);
-                const msg = `Missing RFC 9421 Signature Headers and no valid mTLS`; // Match test expectation exactly if possible
+                const msg = e.message;
                 socket.write(`HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: ${msg.length + 11}\r\n\r\nForbidden: ${msg}`);
                 socket.end();
                 return;

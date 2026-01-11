@@ -26,6 +26,10 @@ async function main() {
         console.log("\n2. Registering with Identity Provider...");
         await agent.register();
 
+        // 2.5 Request Certificate
+        console.log("\n2.5 Requesting Certificate from Authority...");
+        await agent.requestCertificate();
+
         // 3. Authenticated Request
         console.log("\n3. Accessing Secured Resource via Proxy...");
         const path = "/product/1";

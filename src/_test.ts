@@ -1,19 +1,20 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { startRegistry, MemoryRegistryService } from "./registry/module";
-import { startProxy } from "./proxy/impl";
-import { startMerchant } from "./merchant/impl";
+import { RegistryServer, MemoryRegistryService } from "./registry/module";
+import { AuthorityServer } from "./authority/module";
+import { ProxyServer } from "./proxy/impl";
+import { MerchantServer } from "./merchant/impl";
 import { Agent } from "./agent/impl";
 import forge from 'node-forge';
 
-const REGISTRY_PORT = 9402;
-const MERCHANT_PORT = 3400;
-const PROXY_PORT = 3401;
+let REGISTRY_URL: string;
+let MERCHANT_URL: string;
+let PROXY_URL: string;
+let AUTHORITY_URL: string;
 
-let REGISTRY_URL = `http://localhost:${REGISTRY_PORT}`;
-const MERCHANT_URL = `http://localhost:${MERCHANT_PORT}`;
-const PROXY_URL = `https://localhost:${PROXY_PORT}`;
-
-let registryServer: any, merchantServer: any, proxyServer: any;
+let authorityServer: AuthorityServer;
+let registryServer: RegistryServer;
+let merchantServer: MerchantServer;
+let proxyServer: any; // Using any for proxyServer because it's a ProxyService from impl
 let serverCert: string, serverKey: string;
 
 function generateCert(cn: string) {
@@ -35,22 +36,37 @@ function generateCert(cn: string) {
 
 beforeAll(async () => {
     ({ cert: serverCert, key: serverKey } = generateCert('localhost'));
-    registryServer = startRegistry(0, { service: new MemoryRegistryService() });
+
+    // 1. Authority
+    authorityServer = new AuthorityServer(0);
+    await authorityServer.start();
+    AUTHORITY_URL = `http://localhost:${authorityServer.port}`;
+
+    // 2. Registry
+    registryServer = new RegistryServer(0, new MemoryRegistryService());
+    await registryServer.start();
     REGISTRY_URL = `http://localhost:${registryServer.port}`;
 
-    merchantServer = startMerchant({ port: MERCHANT_PORT });
-    proxyServer = await startProxy({
-        port: PROXY_PORT,
+    // 3. Merchant
+    merchantServer = new MerchantServer({ port: 0 });
+    merchantServer.start();
+    MERCHANT_URL = `http://localhost:${merchantServer.port}`;
+
+    // 4. Proxy
+    proxyServer = new ProxyServer({
+        port: 0,
         merchantUrl: MERCHANT_URL,
         registryUrl: REGISTRY_URL,
+        authorityUrl: AUTHORITY_URL,
         tls: { cert: serverCert, key: serverKey },
         debug: true
     });
-    proxyServer.start();
-    await new Promise(r => setTimeout(r, 500));
+    await proxyServer.start();
+    PROXY_URL = `https://localhost:${proxyServer.port}`;
 });
 
 afterAll(() => {
+    authorityServer?.stop();
     registryServer?.stop();
     merchantServer?.stop();
     proxyServer?.stop();
@@ -61,10 +77,11 @@ describe("TAP End-to-End Auth Combinations", () => {
         const agent = new Agent({
             name: "E2E_MTLS_AGENT",
             registryUrl: REGISTRY_URL,
+            authorityUrl: AUTHORITY_URL,
             proxyUrl: PROXY_URL,
             authMode: 'mTLS'
         });
-        agent.generateKey("mtls-key", 'rsa'); // RSA for node-forge support in tests
+        agent.generateKey("mtls-key", 'rsa');
         await agent.register();
         await agent.requestCertificate();
 
@@ -74,6 +91,7 @@ describe("TAP End-to-End Auth Combinations", () => {
         const mtlsAgent = new Agent({
             name: "Authority mTLS Agent",
             registryUrl: REGISTRY_URL,
+            authorityUrl: AUTHORITY_URL,
             proxyUrl: PROXY_URL,
             authMode: 'mTLS',
             tls: {
@@ -93,6 +111,7 @@ describe("TAP End-to-End Auth Combinations", () => {
         const agent = new Agent({
             name: "Registry mTLS Agent",
             registryUrl: REGISTRY_URL,
+            authorityUrl: AUTHORITY_URL,
             proxyUrl: PROXY_URL,
             authMode: 'mTLS'
         });
@@ -100,12 +119,12 @@ describe("TAP End-to-End Auth Combinations", () => {
         await agent.register();
         const agentId = (agent as any).agentId;
 
-        // Manually generate a cert NOT signed by the authority
         const selfSignedTls = generateCert(agentId);
 
         const mtlsAgent = new Agent({
             name: "Registry mTLS Agent",
             registryUrl: REGISTRY_URL,
+            authorityUrl: AUTHORITY_URL,
             proxyUrl: PROXY_URL,
             authMode: 'mTLS',
             tls: {
@@ -122,6 +141,7 @@ describe("TAP End-to-End Auth Combinations", () => {
         const agent = new Agent({
             name: "Authority Sig Agent",
             registryUrl: REGISTRY_URL,
+            authorityUrl: AUTHORITY_URL,
             proxyUrl: PROXY_URL,
             authMode: 'signature',
             tls: { rejectUnauthorized: false }
@@ -138,6 +158,7 @@ describe("TAP End-to-End Auth Combinations", () => {
         const agent = new Agent({
             name: "Registry Sig Agent",
             registryUrl: REGISTRY_URL,
+            authorityUrl: AUTHORITY_URL,
             proxyUrl: PROXY_URL,
             authMode: 'signature',
             tls: { rejectUnauthorized: false }

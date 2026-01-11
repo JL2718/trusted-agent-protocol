@@ -2,19 +2,14 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { startProxy } from "../impl";
 import forge from 'node-forge';
 
-const PROXY_PORT = 3110;
-const MERCHANT_PORT = 3111;
-const REGISTRY_PORT = 9112;
-
-const MERCHANT_URL = `http://127.0.0.1:${MERCHANT_PORT}`;
-const REGISTRY_URL = `http://127.0.0.1:${REGISTRY_PORT}`;
-const PROXY_URL = `https://127.0.0.1:${PROXY_PORT}`;
-
 let serverCert: string;
 let serverKey: string;
 
 let merchantServer: any;
+let registryServer: any;
 let proxyServer: any;
+
+let proxyUrl: string;
 
 function generateCert(cn: string) {
     const keys = forge.pki.rsa.generateKeyPair(2048);
@@ -37,33 +32,48 @@ beforeAll(async () => {
     ({ cert: serverCert, key: serverKey } = generateCert('localhost'));
 
     merchantServer = Bun.serve({
-        port: MERCHANT_PORT,
+        port: 0,
         fetch(req) {
-            return new Response(JSON.stringify({ id: 1, name: "Test Product" }), {
-                headers: { "Content-Type": "application/json" }
-            });
+            return new Response("Home Page", { status: 200 });
         }
     });
 
+    const merchantUrl = `http://127.0.0.1:${merchantServer.port}`;
+
+    registryServer = Bun.serve({
+        port: 0,
+        fetch(req) {
+            const url = new URL(req.url);
+            if (url.pathname === '/authority/cert') {
+                return new Response(serverCert, { headers: { "Content-Type": "text/plain" } });
+            }
+            return new Response("Not Found", { status: 404 });
+        }
+    });
+
+    const registryUrl = `http://127.0.0.1:${registryServer.port}`;
+
     proxyServer = await startProxy({
-        port: PROXY_PORT,
-        merchantUrl: MERCHANT_URL,
-        registryUrl: REGISTRY_URL,
+        port: 0,
+        merchantUrl: merchantUrl,
+        registryUrl: registryUrl,
+        authorityUrl: registryUrl,
         debug: true,
         tls: { cert: serverCert, key: serverKey }
     });
-    proxyServer.start();
+
+    proxyUrl = `https://127.0.0.1:${proxyServer.port}`;
 });
 
 afterAll(() => {
     merchantServer?.stop();
+    registryServer?.stop();
     proxyServer?.stop();
 });
 
-describe("Proxy Public Endpoint", () => {
-    test("Public endpoint /test-proxy", async () => {
-        const res = await fetch(`${PROXY_URL}/test-proxy`, {
-            headers: { 'Connection': 'close' },
+describe("Proxy Public Routes", () => {
+    test("Health Check: Accessible without auth", async () => {
+        const res = await fetch(`${proxyUrl}/test-proxy`, {
             tls: { rejectUnauthorized: false }
         });
         expect(res.status).toBe(200);

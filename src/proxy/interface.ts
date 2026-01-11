@@ -8,6 +8,8 @@ export interface ProxyConfig {
     merchantUrl: string;
     /** URL of the Agent Registry Service */
     registryUrl: string;
+    /** URL of the Authority Service */
+    authorityUrl: string;
     /** Enable debug logging */
     debug?: boolean;
     /** TLS Options for HTTPS/mTLS */
@@ -25,6 +27,9 @@ export interface ProxyConfig {
  * Interface for the Proxy Service
  */
 export interface ProxyService {
+    /** Port the proxy is listening on */
+    readonly port: number;
+
     /**
      * Starts the proxy server
      * @returns The server instance

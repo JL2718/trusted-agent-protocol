@@ -110,7 +110,8 @@ export class Agent implements IAgent {
         csr.sign(forgePrivateKey);
         const csrPem = forge.pki.certificationRequestToPem(csr);
 
-        const res = await fetch(`${this.config.registryUrl}/authority/sign`, {
+        const authUrl = this.config.authorityUrl || this.config.registryUrl;
+        const res = await fetch(`${authUrl}/authority/sign`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

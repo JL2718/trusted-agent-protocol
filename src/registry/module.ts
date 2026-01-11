@@ -1,7 +1,7 @@
+import type { Server } from "bun";
 import { RegistryError } from "./interface";
 import type { RegistryService } from "./interface";
 import { getRegistryService } from "./storage/module";
-import { getAuthorityService } from "../authority/module";
 
 export * from "./interface";
 export * from "./storage/module";
@@ -12,9 +12,7 @@ const corsHeaders = {
     "Access-Control-Allow-Headers": "Content-Type",
 };
 
-// Authority will be instantiated per-registry instance to avoid cross-test contamination
-
-function createHandler(service: RegistryService, authority: any) {
+function createHandler(service: RegistryService) {
     return async function handleRequest(req: Request): Promise<Response> {
         const url = new URL(req.url);
         const path = url.pathname;
@@ -27,23 +25,6 @@ function createHandler(service: RegistryService, authority: any) {
 
         try {
             // API Routes
-
-            // GET /authority/cert
-            if (method === "GET" && path === "/authority/cert") {
-                const cert = authority.getCACertificatePem();
-                return new Response(cert, { headers: { ...corsHeaders, "Content-Type": "application/x-pem-file" } });
-            }
-
-            // POST /authority/sign
-            if (method === "POST" && path === "/authority/sign") {
-                const body = await req.json() as any;
-                const { csr, agentId } = body;
-                if (!csr || !agentId) {
-                    return new Response("Missing csr or agentId", { status: 400, headers: corsHeaders });
-                }
-                const cert = authority.signCSR(csr, agentId);
-                return new Response(cert, { headers: { ...corsHeaders, "Content-Type": "application/x-pem-file" } });
-            }
 
             // GET /agents
             if (method === "GET" && path === "/agents") {
@@ -136,16 +117,42 @@ function createHandler(service: RegistryService, authority: any) {
     }
 }
 
-export function startRegistry(port: number | string = 0, options: { service?: RegistryService, authority?: any } = {}) {
-    const service = options.service || getRegistryService();
-    const authority = options.authority || getAuthorityService();
+export class RegistryServer {
+    private server: Server<any> | null = null;
+    private service: RegistryService;
+    private _port: number;
 
-    const server = Bun.serve({
-        port: Number(port),
-        fetch: createHandler(service, authority),
-    });
+    constructor(port: number | string = 0, service?: RegistryService) {
+        this._port = Number(port);
+        this.service = service || getRegistryService();
+    }
 
-    console.log(`Registry Service listening on port ${server.port} (Service: ${service.constructor.name})`);
+    get port(): number {
+        if (!this.server) {
+            throw new Error("Server not started");
+        }
+        return (this.server as any).port;
+    }
+
+    async start(): Promise<void> {
+        this.server = Bun.serve({
+            port: this._port,
+            fetch: createHandler(this.service),
+        });
+        console.log(`Registry Service listening on port ${this.server.port} (Service: ${this.service.constructor.name})`);
+    }
+
+    stop() {
+        if (this.server) {
+            this.server.stop();
+            this.server = null;
+        }
+    }
+}
+
+export function startRegistry(port: number | string = 0, options: { service?: RegistryService } = {}) {
+    const server = new RegistryServer(port, options.service);
+    server.start();
     return server;
 }
 

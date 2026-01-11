@@ -3,14 +3,6 @@ import { startProxy } from "../impl";
 import forge from 'node-forge';
 import { Agent } from "../../agent/impl";
 
-const PROXY_PORT = 3130;
-const MERCHANT_PORT = 3131;
-const REGISTRY_PORT = 9132;
-
-const MERCHANT_URL = `http://127.0.0.1:${MERCHANT_PORT}`;
-const REGISTRY_URL = `http://127.0.0.1:${REGISTRY_PORT}`;
-const PROXY_URL = `https://127.0.0.1:${PROXY_PORT}`;
-
 const AGENT_ID = "proxy-test-agent-sig";
 const KEY_ID = "test-key-sig";
 
@@ -21,8 +13,9 @@ let merchantServer: any;
 let registryServer: any;
 let proxyServer: any;
 
-// We'll capture the agent's JWK during test
 let agentJwk: any = null;
+let proxyUrl: string;
+let registryUrl: string;
 
 function generateCert(cn: string) {
     const keys = forge.pki.rsa.generateKeyPair(2048);
@@ -45,7 +38,7 @@ beforeAll(async () => {
     ({ cert: serverCert, key: serverKey } = generateCert('localhost'));
 
     merchantServer = Bun.serve({
-        port: MERCHANT_PORT,
+        port: 0,
         fetch(req) {
             return new Response(JSON.stringify({ id: 1, name: "Test Product" }), {
                 headers: { "Content-Type": "application/json" }
@@ -53,15 +46,18 @@ beforeAll(async () => {
         }
     });
 
+    const merchantUrl = `http://127.0.0.1:${merchantServer.port}`;
+
     registryServer = Bun.serve({
-        port: REGISTRY_PORT,
+        port: 0,
         fetch(req) {
             const url = new URL(req.url);
             if (url.pathname === `/keys/${KEY_ID}`) {
-                if (!agentJwk) {
-                    return new Response("Not Found", { status: 404 });
-                }
+                if (!agentJwk) return new Response("Not Found", { status: 404 });
                 return new Response(JSON.stringify(agentJwk), { headers: { "Content-Type": "application/json" } });
+            }
+            if (url.pathname === '/authority/cert') {
+                return new Response(serverCert, { headers: { "Content-Type": "text/plain" } });
             }
             if (url.pathname === `/agents/${AGENT_ID}`) {
                 return new Response(JSON.stringify({ id: AGENT_ID, status: 'active' }), { headers: { "Content-Type": "application/json" } });
@@ -70,14 +66,18 @@ beforeAll(async () => {
         }
     });
 
+    registryUrl = `http://127.0.0.1:${registryServer.port}`;
+
     proxyServer = await startProxy({
-        port: PROXY_PORT,
-        merchantUrl: MERCHANT_URL,
-        registryUrl: REGISTRY_URL,
+        port: 0,
+        merchantUrl: merchantUrl,
+        registryUrl: registryUrl,
+        authorityUrl: registryUrl,
         debug: true,
         tls: { cert: serverCert, key: serverKey }
     });
-    proxyServer.start();
+
+    proxyUrl = `https://127.0.0.1:${proxyServer.port}`;
 });
 
 afterAll(() => {
@@ -90,17 +90,14 @@ describe("Proxy Signature Authorization", () => {
     test("Valid Signature: Passes without mTLS", async () => {
         const agent = new Agent({
             name: "Proxy Sig Agent",
-            registryUrl: REGISTRY_URL,
-            proxyUrl: PROXY_URL,
+            registryUrl: registryUrl,
+            proxyUrl: proxyUrl,
             authMode: 'signature',
             tls: { rejectUnauthorized: false }
         });
 
         agent.generateKey(KEY_ID);
-        // Expose the JWK for the mock registry
         agentJwk = (agent as any).keyPair.publicJwk;
-
-        // We need to bypass the real register because we use a mock registry
         (agent as any).agentId = AGENT_ID;
 
         const res = await agent.fetch("/product/1", {

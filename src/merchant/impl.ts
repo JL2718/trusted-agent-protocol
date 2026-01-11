@@ -1,5 +1,6 @@
-import { MerchantConfig, MerchantService, Product } from './interface';
+import type { MerchantConfig, MerchantService, Product } from './interface';
 import { renderHomePage } from './ui';
+import type { Server } from 'bun';
 
 // In-memory data
 const PRODUCTS: Product[] = [
@@ -9,57 +10,73 @@ const PRODUCTS: Product[] = [
     { id: "4", name: "Mechanical Keyboard", price: 120.50, description: "Tactile switches for satisfying typing." }
 ];
 
-export function startMerchant(config: MerchantConfig): MerchantService {
-    const server = Bun.serve({
-        port: config.port,
-        async fetch(req) {
-            const url = new URL(req.url);
+export class MerchantServer implements MerchantService {
+    private server: Server<any> | null = null;
+    private config: MerchantConfig;
 
-            // Logging
-            if (config.debug) {
-                console.log(`[Merchant] ${req.method} ${url.pathname}`);
-            }
+    constructor(config: MerchantConfig) {
+        this.config = config;
+    }
 
-            // API: List Products
-            if (url.pathname === '/api/products' && req.method === 'GET') {
-                return new Response(JSON.stringify(PRODUCTS), {
-                    headers: { "Content-Type": "application/json" }
-                });
-            }
+    get port(): number {
+        if (!this.server) return this.config.port;
+        return this.server.port as number;
+    }
 
-            // API: Get Product Detail
-            // Match /api/products/:id
-            const productMatch = url.pathname.match(/^\/api\/products\/([^\/]+)$/);
-            if (productMatch && req.method === 'GET') {
-                const id = productMatch[1];
-                const product = PRODUCTS.find(p => p.id === id);
+    start(): void {
+        this.server = Bun.serve({
+            port: this.config.port,
+            fetch: async (req) => {
+                const url = new URL(req.url);
 
-                if (product) {
-                    return new Response(JSON.stringify(product), {
-                        headers: { "Content-Type": "application/json" }
-                    });
-                } else {
-                    return new Response(JSON.stringify({ error: "Product not found" }), {
-                        status: 404,
+                if (this.config?.debug) {
+                    console.log(`[Merchant] ${req.method} ${url.pathname}`);
+                }
+
+                if (url.pathname === '/api/products' && req.method === 'GET') {
+                    return new Response(JSON.stringify(PRODUCTS), {
                         headers: { "Content-Type": "application/json" }
                     });
                 }
-            }
 
-            // UI: Home Page
-            if (url.pathname === '/' || url.pathname === '/index.html') {
-                return new Response(renderHomePage(), {
-                    headers: { "Content-Type": "text/html" }
-                });
-            }
+                const productMatch = url.pathname.match(/^\/api\/products\/([^\/]+)$/);
+                if (productMatch && req.method === 'GET') {
+                    const id = productMatch[1];
+                    const product = PRODUCTS.find(p => p.id === id);
 
-            // Default 404
-            return new Response("Not Found", { status: 404 });
+                    if (product) {
+                        return new Response(JSON.stringify(product), {
+                            headers: { "Content-Type": "application/json" }
+                        });
+                    } else {
+                        return new Response(JSON.stringify({ error: "Product not found" }), {
+                            status: 404,
+                            headers: { "Content-Type": "application/json" }
+                        });
+                    }
+                }
+
+                if (url.pathname === '/' || url.pathname === '/index.html') {
+                    return new Response(renderHomePage(), {
+                        headers: { "Content-Type": "text/html" }
+                    });
+                }
+
+                return new Response("Not Found", { status: 404 });
+            }
+        });
+    }
+
+    stop(): void {
+        if (this.server) {
+            this.server.stop();
+            this.server = null;
         }
-    });
+    }
+}
 
-    return {
-        start: () => { },
-        stop: () => server.stop()
-    };
+export function startMerchant(config: MerchantConfig): MerchantService {
+    const server = new MerchantServer(config);
+    server.start();
+    return server;
 }

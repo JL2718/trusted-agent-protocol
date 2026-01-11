@@ -3,6 +3,8 @@ export interface AgentConfig {
     name: string;
     /** URL of the Agent Registry */
     registryUrl: string;
+    /** URL of the Authority Service */
+    authorityUrl?: string;
     /** URL of the CDN Proxy */
     proxyUrl: string;
     /** Enable debug logging */

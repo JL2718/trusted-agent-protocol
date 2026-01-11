@@ -11,6 +11,7 @@ export interface MerchantConfig {
 }
 
 export interface MerchantService {
+    readonly port: number;
     start(): void;
     stop(): void;
 }

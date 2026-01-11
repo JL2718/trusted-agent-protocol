@@ -1,5 +1,6 @@
 import forge from 'node-forge';
 import type { IAuthorityService } from './interface';
+import type { Server } from "bun";
 
 export class AuthorityService implements IAuthorityService {
     private caCert: forge.pki.Certificate;
@@ -85,6 +86,60 @@ export class AuthorityService implements IAuthorityService {
             return forge.pki.certificateToPem(cert);
         } catch (e: any) {
             throw new Error(`Failed to sign CSR: ${e.message}`);
+        }
+    }
+}
+
+export class AuthorityServer {
+    private server: Server<any> | null = null;
+    private service: IAuthorityService;
+    private _port: number;
+
+    constructor(port: number | string = 0, service?: IAuthorityService) {
+        this._port = Number(port);
+        this.service = service || new AuthorityService();
+    }
+
+    get port(): number {
+        if (!this.server) {
+            throw new Error("Server not started");
+        }
+        return (this.server as any).port;
+    }
+
+    async start(): Promise<void> {
+        this.server = Bun.serve({
+            port: this._port,
+            fetch: async (req: Request) => {
+                const url = new URL(req.url);
+                const path = url.pathname;
+                const method = req.method;
+
+                if (method === "GET" && path === "/authority/cert") {
+                    const cert = this.service.getCACertificatePem();
+                    return new Response(cert, { headers: { "Content-Type": "application/x-pem-file" } });
+                }
+
+                if (method === "POST" && path === "/authority/sign") {
+                    const body = await req.json() as any;
+                    const { csr, agentId } = body;
+                    if (!csr || !agentId) {
+                        return new Response("Missing csr or agentId", { status: 400 });
+                    }
+                    const cert = this.service.signCSR(csr, agentId);
+                    return new Response(cert, { headers: { "Content-Type": "application/x-pem-file" } });
+                }
+
+                return new Response("Not Found", { status: 404 });
+            }
+        });
+        console.log(`Authority Service listening on port ${this.server.port}`);
+    }
+
+    stop() {
+        if (this.server) {
+            this.server.stop();
+            this.server = null;
         }
     }
 }

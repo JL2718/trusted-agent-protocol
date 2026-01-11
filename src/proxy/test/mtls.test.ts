@@ -3,14 +3,6 @@ import { startProxy } from "../impl";
 import forge from 'node-forge';
 import { Agent } from "../../agent/impl";
 
-const PROXY_PORT = 4125;
-const MERCHANT_PORT = 4126;
-const REGISTRY_PORT = 4127;
-
-const MERCHANT_URL = `http://127.0.0.1:${MERCHANT_PORT}`;
-const REGISTRY_URL = `http://127.0.0.1:${REGISTRY_PORT}`;
-const PROXY_URL = `https://127.0.0.1:${PROXY_PORT}`;
-
 const AGENT_ID = "mtls-isolated-agent";
 
 let serverCert: string;
@@ -21,6 +13,9 @@ let clientKey: string;
 let merchantServer: any;
 let registryServer: any;
 let proxyServer: any;
+
+let proxyUrl: string;
+let registryUrl: string;
 
 function generateCert(cn: string) {
     const keys = forge.pki.rsa.generateKeyPair(2048);
@@ -44,7 +39,7 @@ beforeAll(async () => {
     ({ cert: clientCert, key: clientKey } = generateCert(AGENT_ID));
 
     merchantServer = Bun.serve({
-        port: MERCHANT_PORT,
+        port: 0,
         fetch(req) {
             return new Response(JSON.stringify({ id: 1, name: "Test Product" }), {
                 headers: { "Content-Type": "application/json" }
@@ -52,26 +47,34 @@ beforeAll(async () => {
         }
     });
 
+    const merchantUrl = `http://127.0.0.1:${merchantServer.port}`;
+
     registryServer = Bun.serve({
-        port: REGISTRY_PORT,
+        port: 0,
         fetch(req) {
             const url = new URL(req.url);
             if (url.pathname === `/agents/${AGENT_ID}`) {
                 return new Response(JSON.stringify({ id: AGENT_ID, status: 'active' }), { headers: { "Content-Type": "application/json" } });
             }
+            if (url.pathname === '/authority/cert') {
+                return new Response(serverCert, { headers: { "Content-Type": "text/plain" } });
+            }
             return new Response("Not Found", { status: 404 });
         }
     });
 
+    registryUrl = `http://127.0.0.1:${registryServer.port}`;
+
     proxyServer = await startProxy({
-        port: PROXY_PORT,
-        merchantUrl: MERCHANT_URL,
-        registryUrl: REGISTRY_URL,
+        port: 0,
+        merchantUrl: merchantUrl,
+        registryUrl: registryUrl,
+        authorityUrl: registryUrl,
         debug: true,
         tls: { cert: serverCert, key: serverKey }
     });
-    proxyServer.start();
-    await new Promise(r => setTimeout(r, 500));
+
+    proxyUrl = `https://127.0.0.1:${proxyServer.port}`;
 });
 
 afterAll(() => {
@@ -84,8 +87,8 @@ describe("Proxy mTLS Authorization", () => {
     test("Authorized via mTLS: Bypasses Signature Check", async () => {
         const agent = new Agent({
             name: "Proxy mTLS Agent",
-            registryUrl: REGISTRY_URL,
-            proxyUrl: PROXY_URL,
+            registryUrl: registryUrl,
+            proxyUrl: proxyUrl,
             authMode: 'mTLS',
             tls: {
                 cert: clientCert,

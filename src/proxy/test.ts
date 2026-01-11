@@ -32,36 +32,26 @@ let merchantServer: any;
 let registryServer: any;
 let proxyServer: any;
 
-function generateTestCerts() {
-    const sKeys = forge.pki.rsa.generateKeyPair(2048);
-    const sCert = forge.pki.createCertificate();
-    sCert.publicKey = sKeys.publicKey;
-    sCert.serialNumber = '01';
-    sCert.validity.notBefore = new Date();
-    sCert.validity.notAfter = new Date();
-    sCert.validity.notAfter.setFullYear(sCert.validity.notBefore.getFullYear() + 1);
-    sCert.setSubject([{ name: 'commonName', value: 'localhost' }]);
-    sCert.setIssuer(sCert.subject.attributes);
-    sCert.sign(sKeys.privateKey, forge.md.sha256.create());
-    serverCert = forge.pki.certificateToPem(sCert);
-    serverKey = forge.pki.privateKeyToPem(sKeys.privateKey);
-
-    const cKeys = forge.pki.rsa.generateKeyPair(2048);
-    const cCert = forge.pki.createCertificate();
-    cCert.publicKey = cKeys.publicKey;
-    cCert.serialNumber = '01';
-    cCert.validity.notBefore = new Date();
-    cCert.validity.notAfter = new Date();
-    cCert.validity.notAfter.setFullYear(cCert.validity.notBefore.getFullYear() + 1);
-    cCert.setSubject([{ name: 'commonName', value: AGENT_ID }]);
-    cCert.setIssuer(cCert.subject.attributes);
-    cCert.sign(cKeys.privateKey, forge.md.sha256.create());
-    clientCert = forge.pki.certificateToPem(cCert);
-    clientKey = forge.pki.privateKeyToPem(cKeys.privateKey);
+function generateCert(cn: string) {
+    const keys = forge.pki.rsa.generateKeyPair(2048);
+    const cert = forge.pki.createCertificate();
+    cert.publicKey = keys.publicKey;
+    cert.serialNumber = '01';
+    cert.validity.notBefore = new Date();
+    cert.validity.notAfter = new Date();
+    cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 1);
+    cert.setSubject([{ name: 'commonName', value: cn }]);
+    cert.setIssuer(cert.subject.attributes);
+    cert.sign(keys.privateKey, forge.md.sha256.create());
+    return {
+        cert: forge.pki.certificateToPem(cert),
+        key: forge.pki.privateKeyToPem(keys.privateKey)
+    };
 }
 
 beforeAll(async () => {
-    generateTestCerts();
+    ({ cert: serverCert, key: serverKey } = generateCert('localhost'));
+    ({ cert: clientCert, key: clientKey } = generateCert(AGENT_ID));
 
     merchantServer = Bun.serve({
         port: MERCHANT_PORT,

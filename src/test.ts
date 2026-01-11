@@ -16,41 +16,25 @@ const PROXY_URL = `https://localhost:${PROXY_PORT}`;
 let registryServer: any, merchantServer: any, proxyServer: any;
 let serverCert: string, serverKey: string;
 
-function generateE2ECerts() {
-    const sKeys = forge.pki.rsa.generateKeyPair(2048);
-    const sCert = forge.pki.createCertificate();
-    sCert.publicKey = sKeys.publicKey;
-    sCert.serialNumber = '01';
-    sCert.validity.notBefore = new Date();
-    sCert.validity.notAfter = new Date();
-    sCert.validity.notAfter.setFullYear(sCert.validity.notBefore.getFullYear() + 1);
-    sCert.setSubject([{ name: 'commonName', value: 'localhost' }]);
-    sCert.setIssuer(sCert.subject.attributes);
-    sCert.sign(sKeys.privateKey, forge.md.sha256.create());
-    serverCert = forge.pki.certificateToPem(sCert);
-    serverKey = forge.pki.privateKeyToPem(sKeys.privateKey);
-}
-
-function generateClientCert(agentId: string) {
-    const cKeys = forge.pki.rsa.generateKeyPair(2048);
-    const cCert = forge.pki.createCertificate();
-    cCert.publicKey = cKeys.publicKey;
-    cCert.serialNumber = '01';
-    cCert.validity.notBefore = new Date();
-    cCert.validity.notAfter = new Date();
-    cCert.validity.notAfter.setFullYear(cCert.validity.notBefore.getFullYear() + 1);
-    cCert.setSubject([{ name: 'commonName', value: agentId }]);
-    cCert.setIssuer(cCert.subject.attributes);
-    cCert.sign(cKeys.privateKey, forge.md.sha256.create());
-
+function generateCert(cn: string) {
+    const keys = forge.pki.rsa.generateKeyPair(2048);
+    const cert = forge.pki.createCertificate();
+    cert.publicKey = keys.publicKey;
+    cert.serialNumber = '01';
+    cert.validity.notBefore = new Date();
+    cert.validity.notAfter = new Date();
+    cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 1);
+    cert.setSubject([{ name: 'commonName', value: cn }]);
+    cert.setIssuer(cert.subject.attributes);
+    cert.sign(keys.privateKey, forge.md.sha256.create());
     return {
-        cert: forge.pki.certificateToPem(cCert),
-        key: forge.pki.privateKeyToPem(cKeys.privateKey)
+        cert: forge.pki.certificateToPem(cert),
+        key: forge.pki.privateKeyToPem(keys.privateKey)
     };
 }
 
 beforeAll(async () => {
-    generateE2ECerts();
+    ({ cert: serverCert, key: serverKey } = generateCert('localhost'));
     registryServer = startRegistry(REGISTRY_PORT, new MemoryRegistryService());
     merchantServer = startMerchant({ port: MERCHANT_PORT });
     proxyServer = await startProxy({
@@ -108,7 +92,7 @@ describe("TAP End-to-End Configurable Auth", () => {
         const agentId = (agent as any).agentId; // Use the actual registered ID
 
         // 2. Generate client cert for this agentId
-        const clientTls = generateClientCert(agentId);
+        const clientTls = generateCert(agentId);
 
         // 3. Re-configure agent for mTLS
         const mtlsAgent = new Agent({

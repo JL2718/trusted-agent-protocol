@@ -89,11 +89,6 @@ export class AuthorityService implements IAuthorityService {
     }
 }
 
-let authorityInstance: IAuthorityService | null = null;
-
 export function getAuthorityService(): IAuthorityService {
-    if (!authorityInstance) {
-        authorityInstance = new AuthorityService();
-    }
-    return authorityInstance;
+    return new AuthorityService();
 }

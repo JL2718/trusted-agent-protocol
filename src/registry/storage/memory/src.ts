@@ -1,17 +1,17 @@
-import {
+import type {
     Agent,
     RegistryKey,
     RegistryService,
     RegisterAgentRequest,
     AddKeyRequest,
-    RegistryError
 } from "./interface";
+import { RegistryError } from "./interface";
 
 export class MemoryRegistryService implements RegistryService {
     private agents = new Map<string, Agent>();
     private keys = new Map<string, RegistryKey>();
     private domainIndex = new Map<string, string>();
-    private idCounter = 1;
+    private idCounter = Math.floor(Math.random() * 1000000);
 
     async listAgents(): Promise<Agent[]> {
         return Array.from(this.agents.values());

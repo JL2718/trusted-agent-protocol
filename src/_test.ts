@@ -9,7 +9,7 @@ const REGISTRY_PORT = 9402;
 const MERCHANT_PORT = 3400;
 const PROXY_PORT = 3401;
 
-const REGISTRY_URL = `http://localhost:${REGISTRY_PORT}`;
+let REGISTRY_URL = `http://localhost:${REGISTRY_PORT}`;
 const MERCHANT_URL = `http://localhost:${MERCHANT_PORT}`;
 const PROXY_URL = `https://localhost:${PROXY_PORT}`;
 
@@ -35,7 +35,9 @@ function generateCert(cn: string) {
 
 beforeAll(async () => {
     ({ cert: serverCert, key: serverKey } = generateCert('localhost'));
-    registryServer = startRegistry(REGISTRY_PORT, new MemoryRegistryService());
+    registryServer = startRegistry(0, { service: new MemoryRegistryService() });
+    REGISTRY_URL = `http://localhost:${registryServer.port}`;
+
     merchantServer = startMerchant({ port: MERCHANT_PORT });
     proxyServer = await startProxy({
         port: PROXY_PORT,

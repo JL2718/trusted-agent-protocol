@@ -1,7 +1,7 @@
 import { RegistryError } from "./interface";
 import type { RegistryService } from "./interface";
 import { getRegistryService } from "./storage/module";
-import { getAuthorityService } from "./authority/module";
+import { getAuthorityService } from "../authority/module";
 
 export * from "./interface";
 export * from "./storage/module";
@@ -12,9 +12,9 @@ const corsHeaders = {
     "Access-Control-Allow-Headers": "Content-Type",
 };
 
-const authority = getAuthorityService();
+// Authority will be instantiated per-registry instance to avoid cross-test contamination
 
-function createHandler(service: RegistryService) {
+function createHandler(service: RegistryService, authority: any) {
     return async function handleRequest(req: Request): Promise<Response> {
         const url = new URL(req.url);
         const path = url.pathname;
@@ -50,7 +50,6 @@ function createHandler(service: RegistryService) {
                 const agents = await service.listAgents();
                 return Response.json(agents, { headers: corsHeaders });
             }
-            // ... rest of the file ...
 
             // POST /agents
             if (method === "POST" && path === "/agents") {
@@ -137,14 +136,17 @@ function createHandler(service: RegistryService) {
     }
 }
 
-export function startRegistry(port: number | string = 3000, serviceInstance?: RegistryService) {
-    const service = serviceInstance || getRegistryService();
-    console.log(`Registry Service listening on port ${port} (Service: ${service.constructor.name})`);
+export function startRegistry(port: number | string = 0, options: { service?: RegistryService, authority?: any } = {}) {
+    const service = options.service || getRegistryService();
+    const authority = options.authority || getAuthorityService();
 
-    return Bun.serve({
-        port,
-        fetch: createHandler(service),
+    const server = Bun.serve({
+        port: Number(port),
+        fetch: createHandler(service, authority),
     });
+
+    console.log(`Registry Service listening on port ${server.port} (Service: ${service.constructor.name})`);
+    return server;
 }
 
 if (import.meta.main) {

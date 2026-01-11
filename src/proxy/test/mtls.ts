@@ -2,15 +2,14 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { startProxy } from "../impl";
 import forge from 'node-forge';
 import { Agent } from "../../agent/impl";
-import https from 'node:https';
 
 const PROXY_PORT = 4125;
 const MERCHANT_PORT = 4126;
 const REGISTRY_PORT = 4127;
 
-const MERCHANT_URL = `http://[::1]:${MERCHANT_PORT}`;
-const REGISTRY_URL = `http://[::1]:${REGISTRY_PORT}`;
-const PROXY_URL = `https://[::1]:${PROXY_PORT}`;
+const MERCHANT_URL = `http://127.0.0.1:${MERCHANT_PORT}`;
+const REGISTRY_URL = `http://127.0.0.1:${REGISTRY_PORT}`;
+const PROXY_URL = `https://127.0.0.1:${PROXY_PORT}`;
 
 const AGENT_ID = "mtls-isolated-agent";
 
@@ -72,7 +71,7 @@ beforeAll(async () => {
         tls: { cert: serverCert, key: serverKey }
     });
     proxyServer.start();
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 500));
 });
 
 afterAll(() => {
@@ -83,33 +82,23 @@ afterAll(() => {
 
 describe("Proxy mTLS Authorization", () => {
     test("Authorized via mTLS: Bypasses Signature Check", async () => {
-        // Use node:https directly to avoid Bun's fetch connection pooling bug
-        return new Promise((resolve, reject) => {
-            const req = https.request({
-                hostname: '[::1]',
-                port: PROXY_PORT,
-                path: '/product/1',
-                method: 'GET',
+        const agent = new Agent({
+            name: "Proxy mTLS Agent",
+            registryUrl: REGISTRY_URL,
+            proxyUrl: PROXY_URL,
+            authMode: 'mTLS',
+            tls: {
                 cert: clientCert,
                 key: clientKey,
-                rejectUnauthorized: false,
-                headers: { 'Connection': 'close' }
-            }, (res) => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => {
-                    try {
-                        expect(res.statusCode).toBe(200);
-                        const json = JSON.parse(data);
-                        expect(json.name).toBe("Test Product");
-                        resolve(undefined);
-                    } catch (e) {
-                        reject(e);
-                    }
-                });
-            });
-            req.on('error', reject);
-            req.end();
+                rejectUnauthorized: false
+            }
         });
+
+        const res = await agent.fetch("/product/1", {
+            headers: { 'Connection': 'close' }
+        });
+        expect(res.status).toBe(200);
+        const data = await res.json() as any;
+        expect(data.name).toBe("Test Product");
     });
 });

@@ -20,3 +20,14 @@ export interface AgentConfig {
         rejectUnauthorized?: boolean;
     };
 }
+
+export interface IAgent {
+    /** Generates a new identity key pair */
+    generateKey(keyId?: string, type?: 'ed25519' | 'rsa'): void;
+    /** Registers the agent with the registry */
+    register(): Promise<void>;
+    /** Requests a certificate from the authority */
+    requestCertificate(): Promise<void>;
+    /** Makes an authenticated request to the proxy */
+    fetch(path: string, options?: RequestInit): Promise<Response>;
+}

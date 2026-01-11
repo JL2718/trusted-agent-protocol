@@ -1,9 +1,9 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { createSignatureHeaders } from '@interledger/http-signature-utils';
-import type { AgentConfig } from './interface';
+import type { AgentConfig, IAgent } from './interface';
 import forge from 'node-forge';
 
-export class Agent {
+export class Agent implements IAgent {
     private config: AgentConfig;
     private keyId: string | null = null;
     private agentId: string | null = null;

@@ -184,8 +184,8 @@ export class Agent {
             };
         }
 
-        // 2. mTLS Auth (Bun specific tls configuration)
-        if (authMode === 'mTLS' && this.config.tls) {
+        // Apply TLS configuration (Bun specific)
+        if (this.config.tls) {
             fetchOptions.tls = {
                 cert: this.config.tls.cert,
                 key: this.config.tls.key,
@@ -194,11 +194,8 @@ export class Agent {
                     ? this.config.tls.rejectUnauthorized
                     : true
             };
-        } else if (authMode === 'mTLS') {
-            // Fallback for HTTPS proxy even without mTLS if configured
-            // we should still allow fetch to fail if cert is missing but mode is mTLS
-            if (this.config.debug) console.warn("[Agent] mTLS requested but no TLS config provided.");
-            // If proxy is HTTPS, we might still need rejectUnauthorized: false for self-signed
+        } else if (urlObj.protocol === 'https:') {
+            // Default for HTTPS proxy without explicit TLS config
             fetchOptions.tls = { rejectUnauthorized: false };
         }
 

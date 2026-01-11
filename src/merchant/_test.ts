@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { startMerchant } from "./src";
+import { startMerchant } from "./impl";
 
 const TEST_PORT = 3002;
 const BASE_URL = `http://localhost:${TEST_PORT}`;

@@ -4,17 +4,17 @@
     "type": "module",
     "scripts": {
         "registry": "bun run src/registry/module.ts",
-        "test:registry:memory": "bun test ./src/registry/storage/memory/test.ts",
-        "test:registry:redis": "bun test ./src/registry/storage/redis/test.ts",
-        "test:registry:sqlite": "bun test ./src/registry/storage/sqlite/test.ts",
+        "test:registry:memory": "bun test ./src/registry/storage/memory/_test.ts",
+        "test:registry:redis": "bun test ./src/registry/storage/redis/_test.ts",
+        "test:registry:sqlite": "bun test ./src/registry/storage/sqlite/_test.ts",
         "proxy": "bun run src/proxy/module.ts",
-        "test:proxy": "bun test ./src/proxy/test.ts",
+        "test:proxy": "bun test ./src/proxy/_test.ts",
         "merchant": "bun run src/merchant/module.ts",
-        "test:merchant": "bun test ./src/merchant/test.ts",
+        "test:merchant": "bun test ./src/merchant/_test.ts",
         "agent": "bun run src/agent/module.ts",
-        "test:agent": "bun test ./src/agent/test.ts",
-        "test:authority": "bun test ./src/registry/authority/test.ts",
-        "test:e2e": "bun test ./src/test.ts"
+        "test:agent": "bun test ./src/agent/_test.ts",
+        "test:authority": "bun test ./src/registry/authority/_test.ts",
+        "test:e2e": "bun test ./src/_test.ts"
     },
     "private": true,
     "devDependencies": {

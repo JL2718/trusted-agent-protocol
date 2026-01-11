@@ -13,8 +13,8 @@ export interface AgentConfig {
     authMode?: 'mTLS' | 'signature';
     /** TLS configuration for mTLS or HTTPS proxy */
     tls?: {
-        cert: string;
-        key: string;
+        cert?: string;
+        key?: string;
         ca?: string;
         /** For testing: allow self-signed certs */
         rejectUnauthorized?: boolean;

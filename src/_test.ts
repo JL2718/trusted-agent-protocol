@@ -81,20 +81,10 @@ describe("TAP End-to-End Auth Combinations", () => {
             }
         });
 
-        const originalFetch = global.fetch;
-        (global as any).fetch = (url: any, init: any) => {
-            if (url.startsWith(PROXY_URL)) {
-                return originalFetch(url, { ...init, tls: { ...init.tls, rejectUnauthorized: false } });
-            }
-            return originalFetch(url, init);
-        };
-
         const res = await mtlsAgent.fetch("/product/1");
         expect(res.status).toBe(200);
-        const data = await res.json();
+        const data = await res.json() as any;
         expect(data.id.toString()).toBe("1");
-
-        global.fetch = originalFetch;
     });
 
     test("2. mTLS + Registry-verified (Fallback)", async () => {
@@ -122,18 +112,8 @@ describe("TAP End-to-End Auth Combinations", () => {
             }
         });
 
-        const originalFetch = global.fetch;
-        (global as any).fetch = (url: any, init: any) => {
-            if (url.startsWith(PROXY_URL)) {
-                return originalFetch(url, { ...init, tls: { ...init.tls, rejectUnauthorized: false } });
-            }
-            return originalFetch(url, init);
-        };
-
         const res = await mtlsAgent.fetch("/product/1");
         expect(res.status).toBe(200);
-
-        global.fetch = originalFetch;
     });
 
     test("3. HTTP Sig + Authority-signed cert (Offline)", async () => {
@@ -141,24 +121,15 @@ describe("TAP End-to-End Auth Combinations", () => {
             name: "Authority Sig Agent",
             registryUrl: REGISTRY_URL,
             proxyUrl: PROXY_URL,
-            authMode: 'signature'
+            authMode: 'signature',
+            tls: { rejectUnauthorized: false }
         });
         agent.generateKey("sig-key", 'rsa');
         await agent.register();
         await agent.requestCertificate();
 
-        const originalFetch = global.fetch;
-        (global as any).fetch = (url: any, init: any) => {
-            if (url.startsWith(PROXY_URL)) {
-                return originalFetch(url, { ...init, tls: { rejectUnauthorized: false } });
-            }
-            return originalFetch(url, init);
-        };
-
         const res = await agent.fetch("/product/1");
         expect(res.status).toBe(200);
-
-        global.fetch = originalFetch;
     });
 
     test("4. HTTP Sig + Registry-verified (Default)", async () => {
@@ -166,22 +137,13 @@ describe("TAP End-to-End Auth Combinations", () => {
             name: "Registry Sig Agent",
             registryUrl: REGISTRY_URL,
             proxyUrl: PROXY_URL,
-            authMode: 'signature'
+            authMode: 'signature',
+            tls: { rejectUnauthorized: false }
         });
         agent.generateKey("reg-sig-key");
         await agent.register();
 
-        const originalFetch = global.fetch;
-        (global as any).fetch = (url: any, init: any) => {
-            if (url.startsWith(PROXY_URL)) {
-                return originalFetch(url, { ...init, tls: { rejectUnauthorized: false } });
-            }
-            return originalFetch(url, init);
-        };
-
         const res = await agent.fetch("/product/1");
         expect(res.status).toBe(200);
-
-        global.fetch = originalFetch;
     });
 });

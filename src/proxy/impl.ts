@@ -10,6 +10,10 @@ export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
     }
 
     const tlsConf = config.tls;
+    if (!tlsConf) {
+        throw new Error("TLS configuration is required for Proxy");
+    }
+
     const tlsOptions = {
         key: tlsConf.key,
         cert: tlsConf.cert,
@@ -92,7 +96,7 @@ export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
 
         // 1. Diagnostic
         if (path === '/test-proxy') {
-            socket.write("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 12\r\n\r\nProxy Active");
+            socket.write("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 12\r\n\r\nProxy Active");
             socket.end();
             return;
         }
@@ -205,7 +209,7 @@ export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
             } catch (e: any) {
                 if (config.debug) console.error(`[Proxy] Denied: ${e.message}`);
                 const msg = e.message;
-                socket.write(`HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: ${msg.length + 11}\r\n\r\nForbidden: ${msg}`);
+                socket.write(`HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: ${msg.length + 11}\r\n\r\nForbidden: ${msg}`);
                 socket.end();
                 return;
             }
@@ -237,9 +241,12 @@ export async function startProxy(config: ProxyConfig): Promise<ProxyService> {
 
             // Send response back
             let resHeaders = `HTTP/1.1 ${proxyRes.status} ${proxyRes.statusText}\r\n`;
+            let hasConnectionClose = false;
             proxyRes.headers.forEach((v, k) => {
+                if (k.toLowerCase() === 'connection' && v.toLowerCase() === 'close') hasConnectionClose = true;
                 resHeaders += `${k}: ${v}\r\n`;
             });
+            if (!hasConnectionClose) resHeaders += "Connection: close\r\n";
             resHeaders += '\r\n';
 
             socket.write(resHeaders);

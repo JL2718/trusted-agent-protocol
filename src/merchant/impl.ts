@@ -1,6 +1,6 @@
 import type { MerchantConfig, MerchantService, Product } from './interface';
-import { renderHomePage } from './ui';
 import type { Server } from 'bun';
+import path from 'path';
 
 // In-memory data
 const PRODUCTS: Product[] = [
@@ -56,10 +56,17 @@ export class MerchantServer implements MerchantService {
                     }
                 }
 
-                if (url.pathname === '/' || url.pathname === '/index.html') {
-                    return new Response(renderHomePage(), {
-                        headers: { "Content-Type": "text/html" }
-                    });
+                // Match static files
+                let filePath = url.pathname;
+                if (filePath === '/') {
+                    filePath = '/index.html';
+                }
+
+                const fullPath = path.join(import.meta.dir, "public", filePath);
+                const file = Bun.file(fullPath);
+
+                if (await file.exists()) {
+                    return new Response(file);
                 }
 
                 return new Response("Not Found", { status: 404 });

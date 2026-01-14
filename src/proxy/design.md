@@ -11,7 +11,7 @@ Implement a secure "Edge" Proxy that intercepts HTTP traffic and enforces the Tr
 
 ## Authentication Logic
 
-The Proxy employs a "Defense in Depth" strategy:
+The Proxy supports flexible authentication strategies to balance security, performance, and standard compliance:
 
 1.  **Layer 1: Identity (Certificate)**
     *   Checks for **mTLS** peer certificate OR `Client-Cert` header.

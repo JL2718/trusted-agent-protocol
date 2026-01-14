@@ -128,7 +128,7 @@ sequenceDiagram
 ```
 
 ### 2. Dual Auth (Cert Header + Signature)
-*The standard "Defense in Depth" flow.*
+*Combines mTLS/Client-Cert and Application-Layer Signatures.*
 The Agent provides the certificate as an HTTP Header (RFC 9440 style) and includes a signature. The Proxy uses the public key from the header certificate (after verifying it) to validate the signature, avoiding a Registry lookup.
 
 ```mermaid

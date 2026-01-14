@@ -6,9 +6,9 @@ A secure, edge-enforced system for authenticating Autonomous AI Agents using the
 
 This project implements a reference architecture where a **CDN Proxy** sits between AI Agents and Merchant Applications, enforcing identity and security at the edge.
 
-It utilizes a defense-in-depth strategy combining:
-1.  **Mutual TLS / Client Certificates** (RFC 9440) for connection-level identity.
-2.  **HTTP Message Signatures** (RFC 9421) for request-level proof-of-possession.
+It supports multiple standard authentication mechanisms to ensure compatibility, compliance, and scalability:
+1.  **Mutual TLS / Client Certificates** (RFC 9440) for scalable, connection-level identity verification by the CA.
+2.  **HTTP Message Signatures** (RFC 9421) for fine-grained, request-level proof-of-possession and compatibility with application-layer signing.
 
 For detailed architecture and protocol diagrams, see [src/design.md](src/design.md).
 

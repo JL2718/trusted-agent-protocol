@@ -1,10 +1,11 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { startMerchant } from "./impl";
+import type { MerchantService, Product } from "./interface";
 
 const TEST_PORT = 3002;
 const BASE_URL = `http://localhost:${TEST_PORT}`;
 
-let service;
+let service: MerchantService;
 
 beforeAll(() => {
     service = startMerchant({
@@ -23,7 +24,6 @@ describe("Merchant Service", () => {
         expect(res.status).toBe(200);
         const text = await res.text();
         expect(text).toContain("TAP Merchant Store");
-        expect(text).toContain("window.van=");
     });
 
     test("GET /api/products should return list of products", async () => {

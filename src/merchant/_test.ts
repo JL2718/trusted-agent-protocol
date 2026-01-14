@@ -23,7 +23,7 @@ describe("Merchant Service", () => {
         expect(res.status).toBe(200);
         const text = await res.text();
         expect(text).toContain("TAP Merchant Store");
-        expect(text).toContain("van-1.2.6.min.js");
+        expect(text).toContain("window.van=");
     });
 
     test("GET /api/products should return list of products", async () => {
